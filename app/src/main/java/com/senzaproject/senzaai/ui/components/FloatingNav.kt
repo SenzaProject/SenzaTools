@@ -68,6 +68,7 @@ import com.senzaproject.senzaai.ui.theme.LocalReducedEffects
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import com.senzaproject.senzaai.i18n.tr
 
 /**
  * Rekam isi composable ini ke [layer] lalu gambar seperti biasa. Layer ini dipakai bar navigasi
@@ -395,8 +396,8 @@ private fun NavItemsRow(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Icon(d.icon, d.label, tint = c, modifier = Modifier.size(22.dp))
-                Text(d.label, color = c, fontSize = 10.sp, maxLines = 1)
+                Icon(d.icon, tr(d.label), tint = c, modifier = Modifier.size(22.dp))
+                Text(tr(d.label), color = c, fontSize = 10.sp, maxLines = 1)
             }
         }
     }
@@ -443,8 +444,8 @@ private fun FlatNavBar(current: Dest, onSelect: (Dest) -> Unit, modifier: Modifi
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     val tint = if (sel) Color.White else g.textDim
-                    Icon(d.icon, d.label, tint = tint, modifier = Modifier.size(22.dp))
-                    Text(d.label, color = tint, fontSize = 10.sp, maxLines = 1)
+                    Icon(d.icon, tr(d.label), tint = tint, modifier = Modifier.size(22.dp))
+                    Text(tr(d.label), color = tint, fontSize = 10.sp, maxLines = 1)
                 }
             }
         }

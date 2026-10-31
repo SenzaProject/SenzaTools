@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.senzaproject.senzaai.i18n.tr
 
 /**
  * Tombol "liquid glass" (kaca cair):
@@ -203,7 +204,7 @@ fun LiquidGlassButton(
                 Spacer(Modifier.width(8.dp))
             }
             BasicText(
-                text = text,
+                text = tr(text),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 style = TextStyle(

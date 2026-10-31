@@ -78,6 +78,7 @@ import com.senzaproject.senzaai.ui.theme.LocalGlass
 import com.senzaproject.senzaai.ui.theme.LocalReducedEffects
 import kotlin.math.max
 import kotlin.math.min
+import com.senzaproject.senzaai.i18n.tr
 
 // ------------------------------------------------------------------ Latar belakang
 
@@ -127,23 +128,23 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
 
 @Composable
 fun Title(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier, color = LocalGlass.current.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
 }
 
 @Composable
 fun Heading(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier, color = LocalGlass.current.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
 fun Body(text: String, modifier: Modifier = Modifier, dim: Boolean = false, color: Color? = null, maxLines: Int = Int.MAX_VALUE) {
     val g = LocalGlass.current
-    Text(text, modifier, color = color ?: if (dim) g.textDim else g.text, fontSize = 14.sp, lineHeight = 20.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+    Text(tr(text), modifier, color = color ?: if (dim) g.textDim else g.text, fontSize = 14.sp, lineHeight = 20.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
 fun Caption(text: String, modifier: Modifier = Modifier, color: Color? = null) {
-    Text(text, modifier, color = color ?: LocalGlass.current.textDim, fontSize = 12.sp, lineHeight = 16.sp)
+    Text(tr(text), modifier, color = color ?: LocalGlass.current.textDim, fontSize = 12.sp, lineHeight = 16.sp)
 }
 
 @Composable
@@ -221,7 +222,7 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
-        Text(text, color = fg, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
+        Text(tr(text), color = fg, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
     }
 }
 
@@ -244,7 +245,7 @@ fun StatusPill(text: String, color: Color) {
             .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 3.dp)
     ) {
-        Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(tr(text), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -288,8 +289,8 @@ fun InfoSectionCard(section: InfoSection, startExpanded: Boolean = true) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 section.rows.forEach { r ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(r.label, Modifier.weight(0.42f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
-                        Text(r.value, Modifier.weight(0.58f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+                        Text(tr(r.label), Modifier.weight(0.42f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
+                        Text(tr(r.value), Modifier.weight(0.58f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -333,8 +334,8 @@ fun <T> LimitedList(items: List<T>, initial: Int = 40, step: Int = 80, row: @Com
 @Composable
 fun KeyValue(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(label, Modifier.weight(0.4f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
-        Text(value, Modifier.weight(0.6f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+        Text(tr(label), Modifier.weight(0.4f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
+        Text(tr(value), Modifier.weight(0.6f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -361,7 +362,7 @@ fun GlassTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
-        label = { Text(label) },
+        label = { Text(tr(label)) },
         modifier = modifier.fillMaxWidth(),
         singleLine = singleLine,
         minLines = minLines,
@@ -394,10 +395,10 @@ fun ConfirmDialog(
         onDismissRequest = onDismiss,
         containerColor = if (g.dark) Color(0xFF151B3D) else Color(0xFFF4F6FF),
         shape = RoundedCornerShape(28.dp),
-        title = { Text(title, color = g.text, fontWeight = FontWeight.SemiBold) },
-        text = { Text(message, color = g.text, fontSize = 14.sp, lineHeight = 20.sp) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText, color = if (danger) g.bad else g.accent, fontWeight = FontWeight.Bold) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal", color = g.textDim) } }
+        title = { Text(tr(title), color = g.text, fontWeight = FontWeight.SemiBold) },
+        text = { Text(tr(message), color = g.text, fontSize = 14.sp, lineHeight = 20.sp) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(tr(confirmText), color = if (danger) g.bad else g.accent, fontWeight = FontWeight.Bold) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("Batal"), color = g.textDim) } }
     )
 }
 
@@ -427,7 +428,7 @@ fun RingGauge(value: Float?, label: String, sub: String? = null, modifier: Modif
             }
             Text(if (value == null) "—" else "${value.toInt()}%", color = g.text, fontSize = (size.value * 0.22f).sp, fontWeight = FontWeight.Bold)
         }
-        Text(label, color = g.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(tr(label), color = g.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         if (sub != null) Caption(sub)
     }
 }

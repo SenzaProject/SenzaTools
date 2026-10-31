@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.senzaproject.senzaai.i18n.Lang
 
 @Composable
 fun SettingsScreen(s: ServiceLocator) {
@@ -26,7 +27,16 @@ fun SettingsScreen(s: ServiceLocator) {
         cacheSize = withContext(Dispatchers.IO) { File(ctx.cacheDir, "analysis").walkTopDown().filter { it.isFile }.sumOf { it.length() } }
     }
 
+    var showLang by remember { mutableStateOf(false) }
+
     ScreenScaffold("Settings", "Tampilan dan privasi") {
+        GlassCard {
+            Heading("Bahasa")
+            Caption("Pilih bahasa tampilan aplikasi.")
+            GlassButton(Lang.displayName(), { showLang = true }, Modifier.fillMaxWidth())
+        }
+        if (showLang) LanguageDialog { showLang = false }
+
         GlassCard {
             Heading("Tampilan")
             Caption("Tema")

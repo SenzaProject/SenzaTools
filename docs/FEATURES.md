@@ -2,6 +2,10 @@
 
 Status: ✅ tersedia · ⚠️ sebagian/bergantung perangkat · ⏳ belum ada
 
+## Bahasa
+✅ Pilihan bahasa di Settings → Bahasa, berlaku langsung tanpa restart: Indonesia, English, Melayu, Español, Français, Deutsch, Português, Русский, Türkçe, 日本語, 한국어, 简体中文, हिन्दी, العربية, atau ikuti sistem.
+⚠️ Inggris diterjemahkan hampir seluruh UI; bahasa lain baru menerjemahkan teks inti (menu, tombol, Settings) dan sisanya tampil dalam Inggris. Bahasa baru bisa ditambah dengan menaruh `assets/lang/<kode>.json` (lihat PATCH_BAHASA.md).
+
 ## Navigasi
 Home · Device · Analyzer · Tools · AI · Settings (floating glass nav bar).
 
