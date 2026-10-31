@@ -29,20 +29,25 @@ fun copyText(ctx: Context, label: String, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan")
+private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "Sinyal", "Charger")
 
 /** Alat bantu praktis untuk pengembang ROM, tanpa internet. */
 @Composable
 fun UtilitiesScreen(s: ServiceLocator) {
     var tab by rememberSaveable { mutableStateOf(0) }
-    ScreenScaffold("Toolkit", "Diagnostik, properti, menu daya, ekspor laporan, pintasan") {
+    ScreenScaffold("Toolkit", "Diagnostik, mode game, DPI, RAM, sinyal, fast charger, dan lainnya") {
         ChipRow(TABS, tab) { tab = it }
         when (tab) {
             0 -> DiagTab(s)
             1 -> PropsTab()
             2 -> PowerTab(s)
             3 -> ExportTab(s)
-            else -> ShortcutsTab()
+            4 -> ShortcutsTab()
+            5 -> GameFocusTab(s)
+            6 -> DpiTab(s)
+            7 -> RamTab(s)
+            8 -> SignalTab(s)
+            else -> ChargerTab(s)
         }
     }
 }

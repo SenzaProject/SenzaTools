@@ -21,6 +21,7 @@ class ServiceLocator(val app: Application) {
     val access by lazy { AccessManager(app, operationLog) }
     val editor by lazy { com.senzaproject.senzaai.platform.root.RootEditor(app, access, operationLog) }
     val perf by lazy { com.senzaproject.senzaai.platform.root.PerfTuner(app, access) }
+    val booster by lazy { com.senzaproject.senzaai.platform.root.Booster(app, access) }
     val diagnostics by lazy { SmartDiagnostics(app, device) }
     val monitor by lazy { PerformanceMonitor(device, access) }
     val history by lazy { HistoryStore(app) }
