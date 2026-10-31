@@ -89,7 +89,7 @@ class SmartDiagnostics(private val ctx: Context, private val device: DeviceRepos
 
         if (f.none { it.severity != Severity.INFO }) {
             f += Finding("Tidak ada masalah mencolok", "Seluruh pemeriksaan lokal lulus ambang batas.", Certainty.PROVEN, Severity.INFO,
-                "Pemeriksaan ini terbatas pada data yang dapat dibaca. Untuk dugaan masalah tertentu, gunakan AI Assistant dengan log terkait.")
+                "Pemeriksaan ini terbatas pada data yang dapat dibaca. Untuk dugaan masalah tertentu, ambil log di Toolkit → Ekspor lalu periksa manual.")
         }
         return DiagnosticReport(System.currentTimeMillis(), f.sortedByDescending { it.severity.ordinal })
     }

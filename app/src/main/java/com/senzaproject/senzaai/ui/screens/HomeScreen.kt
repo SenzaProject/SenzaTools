@@ -76,7 +76,7 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
         }
     }
 
-    ScreenScaffold("Senza AI", "Intelligent Android. Smarter System Control.") {
+    ScreenScaffold("Senza Tools", "Intelligent Android. Smarter System Control.") {
         GlassCard(strong = true) {
             Heading("${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}")
             Caption("Android ${Build.VERSION.RELEASE} · SDK ${Build.VERSION.SDK_INT} · ${Build.DEVICE}")
@@ -134,7 +134,7 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                         Body(f.title, Modifier.weight(1f))
                     }
                 }
-                if (rep.findings.size > 4) Caption("+${rep.findings.size - 4} temuan lain — buka tab AI untuk detail.")
+                if (rep.findings.size > 4) Caption("+${rep.findings.size - 4} temuan lain — buka tab Toolkit untuk detail.")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton(if (diagBusy) "Memeriksa…" else "Jalankan diagnostik", {
@@ -144,7 +144,7 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                         diagBusy = false
                     }
                 }, primary = true, enabled = !diagBusy)
-                GlassButton("Buka AI", { go(Dest.AI) })
+                GlassButton("Buka Toolkit", { go(Dest.TOOLKIT) })
             }
         }
 

@@ -206,30 +206,7 @@ fun GlassButton(
     enabled: Boolean = true,
     danger: Boolean = false,
     icon: ImageVector? = null
-) {
-    val g = LocalGlass.current
-    val shape = RoundedCornerShape(16.dp)
-    val accent = if (danger) g.bad else g.accent
-    val bg = if (primary) Brush.linearGradient(listOf(accent, if (danger) g.bad.copy(alpha = 0.8f) else g.accent2))
-    else Brush.linearGradient(listOf(g.glassFillStrong, g.glassFill))
-    val fg = if (primary) Color.White else if (danger) g.bad else g.text
-    Row(
-        modifier
-            .clip(shape)
-            .background(bg)
-            .border(1.dp, if (primary) Color.White.copy(alpha = 0.35f) else g.borderLo.copy(alpha = 0.8f), shape)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 11.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) {
-            Icon(icon, null, tint = fg.copy(alpha = if (enabled) 1f else 0.4f), modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-        }
-        Text(text, color = fg.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
+) = LiquidGlassButton(text, onClick, modifier, primary = primary, danger = danger, enabled = enabled, icon = icon)
 
 @Composable
 fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {

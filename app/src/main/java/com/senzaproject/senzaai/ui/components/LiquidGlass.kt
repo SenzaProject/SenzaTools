@@ -9,6 +9,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,7 +69,8 @@ fun LiquidGlassButton(
     primary: Boolean = false,
     danger: Boolean = false,
     enabled: Boolean = true,
-    cornerRadius: Dp = 28.dp
+    cornerRadius: Dp = 28.dp,
+    icon: ImageVector? = null
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -190,17 +197,23 @@ fun LiquidGlassButton(
             .padding(horizontal = 16.dp, vertical = 11.dp),
         contentAlignment = Alignment.Center
     ) {
-        BasicText(
-            text = text,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                shadow = Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 1f), 4f)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            BasicText(
+                text = text,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    shadow = Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 1f), 4f)
+                )
             )
-        )
+        }
     }
 }

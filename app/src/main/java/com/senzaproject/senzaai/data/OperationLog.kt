@@ -8,7 +8,7 @@ import java.io.File
 
 data class LogEntry(val time: Long, val mode: String, val action: String, val result: String)
 
-/** Catatan operasi sensitif (root/shell/AI). Disimpan lokal di app, maksimal 300 entri. */
+/** Catatan operasi sensitif (root/shell). Disimpan lokal di app, maksimal 300 entri. */
 class OperationLog(ctx: Context) {
     private val file = File(ctx.filesDir, "operations.log")
     private val _entries = MutableStateFlow(load())

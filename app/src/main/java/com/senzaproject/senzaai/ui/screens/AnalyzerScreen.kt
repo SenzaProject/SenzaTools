@@ -415,7 +415,7 @@ private fun CompatTab(vm: AnalyzerViewModel) {
     val pick = rememberFilePicker { vm.loadCompatSource(it) }
     GlassCard {
         Heading("ROM Compatibility Assistant")
-        Body("Pilih build.prop ROM sumber. Senza AI membandingkannya dengan perangkat ini sebagai target: SDK, ABI, VNDK, Treble, partisi, dan platform. Tanpa data di kedua sisi, hasil ditandai \"belum dapat dipastikan\".", dim = true)
+        Body("Pilih build.prop ROM sumber. Senza Tools membandingkannya dengan perangkat ini sebagai target: SDK, ABI, VNDK, Treble, partisi, dan platform. Tanpa data di kedua sisi, hasil ditandai \"belum dapat dipastikan\".", dim = true)
         PickRow("Pilih build.prop sumber" to pick)
         Caption("Untuk ROM lengkap (ZIP/folder), gunakan tab ROM: kompatibilitas ditampilkan otomatis.")
     }

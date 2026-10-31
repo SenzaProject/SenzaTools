@@ -10,9 +10,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.senzaproject.senzaai.ai.ChatMessage
-import com.senzaproject.senzaai.ai.PromptManager
-import com.senzaproject.senzaai.ai.ResponseValidator
 import com.senzaproject.senzaai.analyzer.apk.ApkAnalyzer
 import com.senzaproject.senzaai.analyzer.apk.ApkReport
 import com.senzaproject.senzaai.analyzer.rom.RomAnalyzer
@@ -44,7 +41,6 @@ class VmFactory(private val s: ServiceLocator) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = when {
         modelClass.isAssignableFrom(AnalyzerViewModel::class.java) -> AnalyzerViewModel(s) as T
-        modelClass.isAssignableFrom(ChatViewModel::class.java) -> ChatViewModel(s) as T
         else -> throw IllegalArgumentException("ViewModel tidak dikenal: ${modelClass.name}")
     }
 }
@@ -297,98 +293,6 @@ class AnalyzerViewModel(private val s: ServiceLocator) : ViewModel() {
     fun analyzeAvcText(source: String, text: String) {
         s.session.lastLog = text.takeLast(60_000)
         avc = AvcState(source, SelinuxAnalyzer.parse(text))
-    }
-}
-
-class ChatViewModel(private val s: ServiceLocator) : ViewModel() {
-    val messages = mutableStateListOf<ChatMessage>()
-    var busy by mutableStateOf(false); private set
-    var error by mutableStateOf<String?>(null); private set
-
-    /** Lampiran yang dikirim ke layanan AI hanya jika dicentang pengguna. */
-    val attach = mutableStateMapOf<String, Boolean>()
-
-    fun toggle(key: String) {
-        attach[key] = !(attach[key] ?: false)
-    }
-
-    fun available(): List<String> = buildList {
-        add(DEVICE)
-        if (s.session.lastDiagnostic != null) add(DIAG)
-        if (s.session.lastPropSummary != null) add(PROP)
-        if (s.session.lastApkSummary != null) add(APK)
-        if (s.session.lastRomSummary != null) add(ROM)
-        if (s.session.lastLog != null) add(LOG)
-    }
-
-    private fun deviceSummary(): String {
-        val d = s.device
-        val b = d.battery()
-        val m = d.memory()
-        val st = d.storage()
-        val p = Sys.props()
-        return buildString {
-            appendLine("${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}), Android ${Build.VERSION.RELEASE} SDK ${Build.VERSION.SDK_INT}")
-            appendLine("Build: ${Build.FINGERPRINT}")
-            appendLine("Kernel: ${System.getProperty("os.version")}; ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
-            appendLine("SELinux: ${d.selinuxMode()}; patch: ${Build.VERSION.SECURITY_PATCH}")
-            appendLine("RAM: ${m.percent.f1()}% dari ${m.totalBytes.formatBytes()}; Storage: ${st.percent.f1()}% dari ${st.totalBytes.formatBytes()}")
-            appendLine("Baterai: ${b.percent}% ${b.status}, suhu ${b.tempC?.f1() ?: "?"} °C, kesehatan ${b.health}")
-            listOf("ro.vndk.version", "ro.treble.enabled", "ro.boot.dynamic_partitions", "ro.build.ab_update", "ro.board.platform")
-                .forEach { k -> p[k]?.let { appendLine("$k=$it") } }
-        }
-    }
-
-    private fun buildAttachments(): List<Pair<String, String>> {
-        val out = mutableListOf<Pair<String, String>>()
-        fun on(k: String) = attach[k] == true
-        if (on(DEVICE)) out += DEVICE to deviceSummary()
-        if (on(DIAG)) s.session.lastDiagnostic?.let { out += DIAG to s.diagnostics.toText(it) }
-        if (on(PROP)) s.session.lastPropSummary?.let { out += PROP to it }
-        if (on(APK)) s.session.lastApkSummary?.let { out += APK to it }
-        if (on(ROM)) s.session.lastRomSummary?.let { out += ROM to it }
-        if (on(LOG)) s.session.lastLog?.let { out += LOG to it.takeLast(10_000) }
-        return out
-    }
-
-    fun clear() {
-        messages.clear()
-        error = null
-    }
-
-    fun send(text: String) {
-        if (text.isBlank() || busy) return
-        val settings = s.aiSettings.load()
-        if (!settings.isReady) {
-            error = "Lengkapi pengaturan AI di Settings → AI (API key, base URL https://, dan model)."
-            return
-        }
-        busy = true
-        error = null
-        viewModelScope.launch {
-            try {
-                val atts = withContext(Dispatchers.IO) { buildAttachments() }
-                val prior = messages.toList().takeLast(12)
-                messages.add(ChatMessage("user", text.trim()))
-                val api = prior + ChatMessage("user", PromptManager.withAttachments(text.trim(), atts))
-                val reply = withContext(Dispatchers.IO) { s.aiClient.chat(settings, PromptManager.SYSTEM, api) }
-                messages.add(ChatMessage("assistant", ResponseValidator.annotate(reply)))
-                s.operationLog.add("AI", "chat via ${settings.provider.label} (${atts.size} lampiran: ${atts.joinToString { it.first }})", "ok")
-            } catch (t: Throwable) {
-                error = t.message ?: "Gagal"
-                s.operationLog.add("AI", "chat via ${settings.provider.label}", "gagal: ${(t.message ?: "").take(80)}")
-            }
-            busy = false
-        }
-    }
-
-    companion object {
-        const val DEVICE = "Ringkasan perangkat"
-        const val DIAG = "Diagnostik"
-        const val PROP = "Properti"
-        const val APK = "APK"
-        const val ROM = "ROM"
-        const val LOG = "Log"
     }
 }
 

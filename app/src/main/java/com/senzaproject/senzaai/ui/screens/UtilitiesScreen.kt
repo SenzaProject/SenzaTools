@@ -29,19 +29,62 @@ fun copyText(ctx: Context, label: String, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-private val TABS = listOf("Properti", "Daya", "Ekspor", "Pintasan")
+private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan")
 
 /** Alat bantu praktis untuk pengembang ROM, tanpa internet. */
 @Composable
 fun UtilitiesScreen(s: ServiceLocator) {
     var tab by rememberSaveable { mutableStateOf(0) }
-    ScreenScaffold("Toolkit", "Pencari properti, menu daya, ekspor laporan, pintasan sistem") {
+    ScreenScaffold("Toolkit", "Diagnostik, properti, menu daya, ekspor laporan, pintasan") {
         ChipRow(TABS, tab) { tab = it }
         when (tab) {
-            0 -> PropsTab()
-            1 -> PowerTab(s)
-            2 -> ExportTab(s)
+            0 -> DiagTab(s)
+            1 -> PropsTab()
+            2 -> PowerTab(s)
+            3 -> ExportTab(s)
             else -> ShortcutsTab()
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------- Diagnostik
+
+@Composable
+private fun DiagTab(s: ServiceLocator) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    val report = s.session.lastDiagnostic
+    GlassCard(strong = true) {
+        Heading("Senza Smart Diagnostics")
+        Body("Pemeriksaan lokal (tanpa internet): baterai, RAM, penyimpanan, suhu, SELinux, patch keamanan, dan konfigurasi build. Setiap temuan menyertakan bukti dan tingkat kepastian.", dim = true)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassButton(if (busy) "Memeriksa…" else "Jalankan diagnostik", {
+                if (!busy) scope.launch {
+                    busy = true
+                    s.session.lastDiagnostic = withContext(Dispatchers.IO) { s.diagnostics.run() }
+                    busy = false
+                }
+            }, Modifier.weight(1f), primary = true, enabled = !busy)
+            GlassButton("Bagikan laporan", {
+                val txt = report?.let { s.diagnostics.toText(it) } ?: return@GlassButton
+                val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, txt) }
+                ctx.startActivity(Intent.createChooser(send, "Bagikan laporan").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }, Modifier.weight(1f), enabled = report != null)
+        }
+    }
+    report?.findings?.forEach { f ->
+        GlassCard {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Heading(f.title, Modifier.weight(1f))
+                SeverityPill(f.severity)
+            }
+            KeyValue("Bukti", f.evidence)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Caption("Kepastian")
+                CertaintyPill(f.certainty)
+            }
+            Body("Rekomendasi: ${f.recommendation}", dim = true)
         }
     }
 }
@@ -228,7 +271,7 @@ private val SHORTCUTS = listOf(
     Shortcut("Pengaturan baterai", "Hemat daya & optimasi baterai.", Settings.ACTION_BATTERY_SAVER_SETTINGS),
     Shortcut("Semua aplikasi", "Kelola aplikasi terpasang.", Settings.ACTION_MANAGE_ALL_APPLICATIONS_SETTINGS),
     Shortcut("Penyimpanan", "Pemakaian penyimpanan internal.", Settings.ACTION_INTERNAL_STORAGE_SETTINGS),
-    Shortcut("Pembaruan sistem", "Cek OTA / patch keamanan.", Settings.ACTION_SYSTEM_UPDATE_SETTINGS)
+    Shortcut("Pembaruan sistem", "Cek OTA / patch keamanan.", "android.settings.SYSTEM_UPDATE_SETTINGS")
 )
 
 @Composable
