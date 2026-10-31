@@ -116,8 +116,8 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                 StatusPill(access.active.label, if (access.active == AccessMode.ROOT) g.warn else g.good)
             }
             Body(
-                if (access.active == AccessMode.ROOT) "Sesi root aktif di aplikasi ini. Operasi root hanya baca dan tercatat di log."
-                else "Normal Access. Fitur akses lanjutan (Root) hanya aktif setelah kamu memverifikasinya di Tools → Akses.",
+                if (access.active == AccessMode.ROOT) "Root aktif di aplikasi ini. Semua operasi root tercatat di log."
+                else "Normal Access. Root diminta sekali saat apk dibuka; bila ditolak, aktifkan lewat Tools → Akses.",
                 dim = true
             )
         }

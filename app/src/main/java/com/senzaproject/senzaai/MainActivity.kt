@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val services = (application as SenzaApp).services
+        // Root diminta sekali saat apk dibuka; kalau sudah diizinkan di root manager, langsung aktif tanpa dialog.
+        services.access.autoRequestRootOnce()
         setContent {
             CompositionLocalProvider(LocalServices provides services) {
                 SenzaTheme(services.uiPrefs.themeMode, services.uiPrefs.reducedEffects) {

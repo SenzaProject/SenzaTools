@@ -32,7 +32,7 @@ private fun rootOkNow(s: ServiceLocator): Boolean {
 }
 
 @Composable
-private fun NeedRoot(ok: Boolean, text: String = "Fitur ini butuh akses root. Verifikasi root dulu (tombol verifikasi di tab Akses/Beranda).") {
+private fun NeedRoot(ok: Boolean, text: String = "Fitur ini butuh akses root. Izinkan di root manager, lalu tekan Minta izin root di Tools → Akses.") {
     if (!ok) Caption(text, color = LocalGlass.current.warn)
 }
 

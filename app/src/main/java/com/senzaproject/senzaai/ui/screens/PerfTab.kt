@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.dp
 import com.senzaproject.senzaai.di.ServiceLocator
 import com.senzaproject.senzaai.platform.root.PerfTuner
 import com.senzaproject.senzaai.ui.components.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -23,6 +24,9 @@ fun PerfTab(s: ServiceLocator) {
     var nodeIdx by remember { mutableStateOf(0) }
     var bypassInGame by remember { mutableStateOf(true) }
     var bootOn by remember { mutableStateOf<Boolean?>(null) }
+    var guardOn by remember { mutableStateOf(perf.guardOn) }
+    var guardRun by remember { mutableStateOf<Boolean?>(null) }
+    var thermalOff by remember { mutableStateOf(perf.ignoreThermal) }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
 
@@ -42,8 +46,11 @@ fun PerfTab(s: ServiceLocator) {
     }
 
     fun report(label: String, o: PerfTuner.Outcome) {
-        msg = if (o.failures.isEmpty()) "$label: perintah dijalankan (${o.commands.size}). Nilai di bawah sudah dibaca ulang; kernel/thermal bisa saja membatasi."
-        else "$label: ada yang gagal:\n" + o.failures.joinToString("\n") { "• $it" }
+        guardOn = perf.guardOn
+        msg = if (o.failures.isEmpty()) "$label: diterapkan dan diperiksa. " +
+            (if (guardOn) "Penjaga frekuensi aktif: nilai ditulis ulang otomatis bila ada yang menurunkannya." else "Penjaga frekuensi mati: nilai bisa berubah lagi oleh sistem.")
+        else "$label: nilai ditolak/dikembalikan kernel:\n" + o.failures.joinToString("\n") { "• $it" } +
+            "\nKemungkinan dibatasi thermal atau oleh kernel; coba frekuensi lebih rendah atau cek suhu."
     }
 
     fun profile(p: PerfTuner.Profile) {
@@ -53,6 +60,7 @@ fun PerfTab(s: ServiceLocator) {
             val node = nodes?.getOrNull(nodeIdx)
             val eff = if (p.bypass) p.copy(bypass = bypassInGame) else p
             val o = perf.applyProfile(eff, cpu.orEmpty(), gpu, node)
+            delay(800)
             refresh()
             report(p.name, o)
             busy = false
@@ -62,10 +70,30 @@ fun PerfTab(s: ServiceLocator) {
     GlassCard(strong = true) {
         Heading("Performa CPU & GPU")
         Body("Atur frekuensi, pilih profil, bypass charger, dan driver grafis. Perubahan berlaku langsung dan kembali normal setelah restart, kecuali \"Terapkan saat boot\" diaktifkan. Dukungan tergantung SoC/kernel; hasil selalu dibaca ulang dari sistem.", dim = true)
-        if (!rootOk) Caption("Root belum diverifikasi: verifikasi di tab Akses agar bisa mengubah pengaturan.")
+        if (!rootOk) Caption("Root belum aktif. Izinkan Senza Tools di root manager, lalu tekan Minta izin root di Tools → Akses.")
     }
     msg?.let { GlassCard { Body(it) } }
     if (busy) Spinner("Memproses…")
+
+    // ---------------------------------------------------------------- Penjaga frekuensi
+    GlassCard {
+        Heading("Penjaga frekuensi (anti-turun)")
+        Body("Frekuensi yang kamu atur dikunci dan dijaga terus: tiap 3 detik nilainya diperiksa dan ditulis ulang bila governor, PPM, atau HAL performa vendor menurunkannya. Aktif otomatis saat kamu menerapkan profil atau frekuensi.", dim = true)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Chip(if (guardOn) "Penjaga: AKTIF" else "Penjaga: MATI", guardOn) {
+                scope.launch {
+                    busy = true; msg = null
+                    val o = perf.setGuard(!guardOn)
+                    guardRun = perf.guardRunning()
+                    report("Penjaga frekuensi", o)
+                    busy = false
+                }
+            }
+            GlassButton("Cek status", { scope.launch { guardRun = perf.guardRunning() } }, enabled = rootOk && !busy)
+        }
+        guardRun?.let { Caption(if (it) "Proses penjaga sedang berjalan." else "Proses penjaga tidak berjalan.") }
+        Caption("Mode Seimbang mematikan penjaga dan mengembalikan rentang frekuensi penuh.")
+    }
 
     // ---------------------------------------------------------------- Profil
     GlassCard {
@@ -76,6 +104,7 @@ fun PerfTab(s: ServiceLocator) {
             GlassButton("Seimbang", { profile(PerfTuner.BALANCED) }, Modifier.weight(1f), enabled = rootOk && !busy)
             GlassButton("Hemat", { profile(PerfTuner.SAVER) }, Modifier.weight(1f), enabled = rootOk && !busy)
         }
+        GlassButton("Maksimal: kunci CPU & GPU di frekuensi tertinggi", { profile(PerfTuner.MAX) }, Modifier.fillMaxWidth(), enabled = rootOk && !busy)
         Caption("Game: frekuensi minimum dinaikkan, governor performa, GPU dikunci tinggi. Seimbang: rentang penuh, governor standar. Hemat: batas atas CPU sekitar 60% dan GPU sekitar 50%.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip("Bypass charger di Mode Game", bypassInGame) { bypassInGame = !bypassInGame }
@@ -112,13 +141,14 @@ fun PerfTab(s: ServiceLocator) {
                     scope.launch {
                         busy = true; msg = null
                         val o = perf.setCpu(pol, min, max, gov)
+                        delay(800)
                         refresh()
                         report(pol.name, o)
                         busy = false
                     }
                 }
             }
-            if (list.isNotEmpty()) Caption("Beberapa SoC MediaTek juga membatasi lewat PPM/thermal sehingga nilai bisa kembali sendiri; cek hasil bacaan ulang.")
+            if (list.isNotEmpty()) Caption("Pakai Kunci (min = max) untuk menahan frekuensi tepat di angka itu. Beberapa SoC MediaTek membatasi lewat PPM/thermal; penjaga akan menulis ulang nilainya, tapi batas thermal tetap bisa menurunkan frekuensi demi keamanan.")
         }
     }
 
@@ -130,11 +160,24 @@ fun PerfTab(s: ServiceLocator) {
             scope.launch {
                 busy = true; msg = null
                 val o = perf.setGpu(g, min, max, lock)
+                delay(800)
                 refresh()
                 report("GPU", o)
                 busy = false
             }
         } }
+        if (gpu?.kind == "MTK") {
+            Chip(if (thermalOff) "Abaikan limit thermal GPU: AKTIF" else "Abaikan limit thermal GPU", thermalOff) {
+                scope.launch {
+                    busy = true; msg = null
+                    val o = perf.setThermalIgnore(!thermalOff)
+                    thermalOff = perf.ignoreThermal
+                    report("Limit thermal GPU", o)
+                    busy = false
+                }
+            }
+            Caption("Hanya bila GPU turun karena limit thermal. Berisiko perangkat panas; matikan lagi bila suhu tinggi.")
+        }
         if (gpuScanned && gpu == null) Body("Antarmuka frekuensi GPU tidak ditemukan (devfreq atau /proc/gpufreq tidak tersedia/terbaca).", dim = true)
     }
 
@@ -224,13 +267,15 @@ fun PerfTab(s: ServiceLocator) {
 @Composable
 private fun CpuPolicyEditor(pol: PerfTuner.CpuPolicy, enabled: Boolean, onApply: (Long, Long, String?) -> Unit) {
     val freqs = pol.freqs
-    var minI by remember(pol) { mutableStateOf(freqs.indexOf(pol.curMin).coerceAtLeast(0)) }
-    var maxI by remember(pol) { mutableStateOf(freqs.indexOf(pol.curMax).let { if (it < 0) freqs.lastIndex else it }) }
-    var govI by remember(pol) { mutableStateOf(pol.govs.indexOf(pol.gov).coerceAtLeast(0)) }
+    var minI by remember(pol.path, pol.curMin, pol.curMax) { mutableStateOf(freqs.indexOf(pol.curMin).coerceAtLeast(0)) }
+    var maxI by remember(pol.path, pol.curMin, pol.curMax) { mutableStateOf(freqs.indexOf(pol.curMax).let { if (it < 0) freqs.lastIndex else it }) }
+    var govI by remember(pol.path, pol.gov) { mutableStateOf(pol.govs.indexOf(pol.gov).coerceAtLeast(0)) }
+    var lock by remember(pol.path) { mutableStateOf(pol.curMin == pol.curMax) }
     val labels = freqs.map { "${it / 1000}" }
 
     Heading("${pol.name} (cpu ${pol.cpus})")
-    Caption("Sekarang: ${pol.curMin / 1000}–${pol.curMax / 1000} MHz · governor ${pol.gov.ifEmpty { "?" }}")
+    Caption("Sekarang: ${pol.curMin / 1000}–${pol.curMax / 1000} MHz · governor ${pol.gov.ifEmpty { "?" }}" +
+        (pol.cur?.let { " · aktual ${it / 1000} MHz" } ?: ""))
     Caption("Minimum (MHz)")
     ChipRow(labels, minI) { minI = it; if (maxI < minI) maxI = minI }
     Caption("Maksimum (MHz)")
@@ -239,25 +284,37 @@ private fun CpuPolicyEditor(pol: PerfTuner.CpuPolicy, enabled: Boolean, onApply:
         Caption("Governor")
         ChipRow(pol.govs, govI) { govI = it }
     }
-    GlassButton("Terapkan ${pol.name}", { onApply(freqs[minI], freqs[maxI], pol.govs.getOrNull(govI)) }, Modifier.fillMaxWidth(), primary = true, enabled = enabled)
+    Chip(if (lock) "Kunci (min = max): AKTIF" else "Kunci (min = max)", lock) { lock = !lock }
+    if (lock) Caption("Frekuensi ditahan tepat di angka Maksimum yang dipilih.")
+    GlassButton("Terapkan ${pol.name}", {
+        val mx = freqs[maxI]
+        onApply(if (lock) mx else freqs[minI], mx, pol.govs.getOrNull(govI))
+    }, Modifier.fillMaxWidth(), primary = true, enabled = enabled)
 }
 
 @Composable
 private fun GpuEditor(g: PerfTuner.GpuInfo, enabled: Boolean, onApply: (Long, Long, Long?) -> Unit) {
     val freqs = g.freqs
     val labels = freqs.map { "${it / g.div}" }
-    var minI by remember(g) { mutableStateOf(g.curMin?.let { freqs.indexOf(it) }?.coerceAtLeast(0) ?: 0) }
-    var maxI by remember(g) { mutableStateOf(g.curMax?.let { freqs.indexOf(it) }?.takeIf { it >= 0 } ?: freqs.lastIndex) }
-    var lockI by remember(g) { mutableStateOf(freqs.lastIndex) }
+    var minI by remember(g.base, g.curMin, g.curMax) { mutableStateOf(g.curMin?.let { freqs.indexOf(it) }?.coerceAtLeast(0) ?: 0) }
+    var maxI by remember(g.base, g.curMin, g.curMax) { mutableStateOf(g.curMax?.let { freqs.indexOf(it) }?.takeIf { it >= 0 } ?: freqs.lastIndex) }
+    var lockI by remember(g.base) { mutableStateOf(freqs.lastIndex) }
+    var lock by remember(g.base) { mutableStateOf(g.curMin != null && g.curMin == g.curMax) }
 
     Caption("Antarmuka: ${if (g.kind == "DEVFREQ") "devfreq ${g.base}" else "MediaTek /proc/gpufreq (kunci frekuensi)"}")
     if (g.kind == "DEVFREQ") {
-        Caption("Sekarang: ${(g.curMin ?: 0) / g.div}–${(g.curMax ?: 0) / g.div} MHz${g.gov?.let { " · governor $it" } ?: ""}")
+        Caption("Sekarang: ${(g.curMin ?: 0) / g.div}–${(g.curMax ?: 0) / g.div} MHz${g.gov?.let { " · governor $it" } ?: ""}" +
+            (g.cur?.let { " · aktual ${it / g.div} MHz" } ?: ""))
         Caption("Minimum (MHz)")
         ChipRow(labels, minI) { minI = it; if (maxI < minI) maxI = minI }
         Caption("Maksimum (MHz)")
         ChipRow(labels, maxI) { maxI = it; if (minI > maxI) minI = maxI }
-        GlassButton("Terapkan GPU", { onApply(freqs[minI], freqs[maxI], null) }, Modifier.fillMaxWidth(), primary = true, enabled = enabled)
+        Chip(if (lock) "Kunci (min = max): AKTIF" else "Kunci (min = max)", lock) { lock = !lock }
+        if (lock) Caption("Frekuensi GPU ditahan tepat di angka Maksimum yang dipilih.")
+        GlassButton("Terapkan GPU", {
+            val mx = freqs[maxI]
+            onApply(if (lock) mx else freqs[minI], mx, null)
+        }, Modifier.fillMaxWidth(), primary = true, enabled = enabled)
     } else {
         Caption("Kunci frekuensi GPU (MHz)")
         ChipRow(labels, lockI) { lockI = it }

@@ -1,6 +1,9 @@
 package com.senzaproject.senzaai.platform
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.senzaproject.senzaai.data.OperationLog
 import com.senzaproject.senzaai.domain.model.AccessMode
 import com.senzaproject.senzaai.domain.model.AccessState
@@ -9,7 +12,10 @@ import com.senzaproject.senzaai.platform.root.CommandGuard
 import com.senzaproject.senzaai.platform.root.SafeAction
 import com.senzaproject.senzaai.utils.ShellResult
 import com.senzaproject.senzaai.utils.Sys
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,7 +23,9 @@ import kotlinx.coroutines.withContext
 
 /**
  * Senza Access Manager: mengelola tiga tingkat akses (Normal, ADB/Shizuku, Root).
- * - Tidak pernah memicu permintaan root otomatis; root hanya diverifikasi saat pengguna menekan tombol.
+ * - Root diminta SEKALI otomatis saat aplikasi dibuka ([autoRequestRootOnce]). Bila sudah pernah disetujui di
+ *   root manager, permintaan itu berjalan senyap dan semua fitur langsung aktif tanpa menekan apa pun.
+ * - Bila ditolak, tidak ditanyakan terus-menerus; pengguna bisa menekan "Minta izin root" kapan saja.
  * - Semua eksekusi root/shell dicatat di [OperationLog].
  */
 class AccessManager(private val ctx: Context, private val log: OperationLog) {
@@ -31,8 +39,17 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
     )
     private val shizukuPkg = "moe.shizuku.privileged.api"
 
+    // State Compose: layar yang membaca isRootVerified otomatis tergambar ulang begitu root disetujui.
+    private var rootVerified by mutableStateOf(false)
+
+    /** True selama permintaan root sedang berjalan (menunggu persetujuan root manager). */
+    var rootChecking by mutableStateOf(false)
+        private set
+
+    private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile
-    private var rootVerified = false
+    private var autoTried = false
 
     private val _state = MutableStateFlow(detect())
     val state: StateFlow<AccessState> = _state.asStateFlow()
@@ -82,13 +99,28 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
         _state.value = detect()
     }
 
-    /** Dipanggil hanya setelah pengguna menyetujui dialog. Memunculkan prompt dari root manager. */
+    /**
+     * Dipanggil sekali saat aplikasi dibuka. Kalau root sudah pernah diizinkan di root manager, ini berjalan
+     * tanpa dialog. Kalau belum, root manager menampilkan permintaan satu kali.
+     */
+    fun autoRequestRootOnce() {
+        if (autoTried) return
+        autoTried = true
+        bgScope.launch { verifyRoot() }
+    }
+
+    /** Memverifikasi root (su -c id). Memunculkan prompt dari root manager bila izin belum diberikan. */
     suspend fun verifyRoot(): ShellResult = withContext(Dispatchers.IO) {
-        val r = Sys.execute(listOf("su", "-c", "id"), 20_000)
-        rootVerified = r.ok && r.output.contains("uid=0")
-        log.add("ROOT", "verifikasi akses (su -c id)", if (rootVerified) "berhasil" else "gagal/ditolak")
-        _state.value = detect()
-        r
+        rootChecking = true
+        try {
+            val r = Sys.execute(listOf("su", "-c", "id"), 30_000)
+            rootVerified = r.ok && r.output.contains("uid=0")
+            log.add("ROOT", "verifikasi akses (su -c id)", if (rootVerified) "berhasil" else "gagal/ditolak")
+            _state.value = detect()
+            r
+        } finally {
+            rootChecking = false
+        }
     }
 
     fun revokeRootSession() {

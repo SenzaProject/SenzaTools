@@ -58,25 +58,8 @@ private fun AccessTab(s: ServiceLocator) {
     val g = LocalGlass.current
     val st by s.access.state.collectAsState()
     val scope = rememberCoroutineScope()
-    var confirm by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    val busy = s.access.rootChecking
     var msg by remember { mutableStateOf<String?>(null) }
-
-    if (confirm) ConfirmDialog(
-        title = "Verifikasi akses root",
-        message = "Senza Tools akan meminta izin root satu kali (menjalankan \"su -c id\") untuk memastikan akses. Root manager akan menampilkan permintaan persetujuan.\n\nSetelah aktif, Senza Tools hanya menjalankan aksi baca-saja yang sudah ditentukan, atau perintah yang kamu ketik dan konfirmasi sendiri. Semua tercatat di Log.",
-        confirmText = "Minta izin root",
-        onConfirm = {
-            confirm = false
-            scope.launch {
-                busy = true
-                val r = s.access.verifyRoot()
-                msg = if (s.access.isRootVerified) "Akses root terverifikasi (uid=0)." else "Root tidak tersedia atau ditolak. ${r.output.take(120)}"
-                busy = false
-            }
-        },
-        onDismiss = { confirm = false }
-    )
 
     GlassCard(strong = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -89,10 +72,17 @@ private fun AccessTab(s: ServiceLocator) {
     ExpandableCard("Lingkungan root", true) {
         st.root.details.forEach { Body("• $it") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassButton(if (busy) "Memeriksa…" else "Verifikasi root", { confirm = true }, primary = true, enabled = !busy && !st.root.verified)
+            GlassButton(if (busy) "Menunggu izin root…" else "Minta izin root", {
+                scope.launch {
+                    val r = s.access.verifyRoot()
+                    msg = if (s.access.isRootVerified) "Akses root aktif (uid=0)." else "Root tidak tersedia atau ditolak. ${r.output.take(120)}"
+                }
+            }, primary = true, enabled = !busy && !st.root.verified)
             if (st.root.verified) GlassButton("Akhiri sesi root", { s.access.revokeRootSession() }, danger = true)
             GlassButton("Deteksi ulang", { s.access.refresh() })
         }
+        if (st.root.verified) Caption("Root aktif. Izin cukup diberikan sekali di root manager; selama tidak dicabut di sana, semua fitur tetap berjalan.")
+        else Caption("Root diminta otomatis sekali saat apk dibuka. Kalau tadi ditolak atau terlewat, tekan Minta izin root.")
         msg?.let { Caption(it) }
     }
     ExpandableCard("Kemampuan mode aktif", true) { st.capabilities.forEach { Body("✓ $it") } }
@@ -237,7 +227,7 @@ private fun FilesTab(s: ServiceLocator) {
         GlassTextField(path, { path = it }, "Path absolut", mono = true)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip(if (asRoot && rootOk) "Mode: Root" else "Mode: Normal", asRoot && rootOk) { if (rootOk) asRoot = !asRoot }
-            if (!rootOk) Caption("Root belum diverifikasi")
+            if (!rootOk) Caption("Root belum aktif (izinkan di root manager)")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassButton("Buka", { open(path) }, Modifier.weight(1f), primary = true, enabled = !busy)
@@ -375,7 +365,7 @@ private fun FilesTab(s: ServiceLocator) {
                 else -> "Overlay: partisi asli tidak disentuh. File ditaruh di module systemless (/data/adb/modules/senza_edit), butuh Magisk/KernelSU/APatch."
             })
             GlassButton("Terapkan perubahan (restart)", { confirmApply = true }, Modifier.fillMaxWidth(), primary = true, danger = true, enabled = rootOk && !busy)
-            if (!rootOk) Caption("Verifikasi root dulu di tab Akses.")
+            if (!rootOk) Caption("Root belum aktif. Izinkan di root manager, lalu tekan Minta izin root di tab Akses.")
         }
         applyMsg?.let { Body(it) }
     }
@@ -607,7 +597,7 @@ private fun ConsoleCard(s: ServiceLocator) {
         GlassTextField(cmd, { cmd = it }, "Perintah", singleLine = false, mono = true, minLines = 2)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip(if (asRoot) "Sebagai root" else "Sebagai aplikasi", asRoot) { if (rootOk) asRoot = !asRoot }
-            if (!rootOk) Caption("Root belum diverifikasi")
+            if (!rootOk) Caption("Root belum aktif (izinkan di root manager)")
         }
         GlassButton(if (busy) "Berjalan…" else "Jalankan…", { confirm = true }, primary = true, enabled = cmd.isNotBlank() && !busy, danger = asRoot)
         output?.let { SelectionContainer { Mono(it, size = 11) } }

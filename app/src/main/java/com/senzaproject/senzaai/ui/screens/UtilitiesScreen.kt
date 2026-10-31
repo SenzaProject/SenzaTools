@@ -174,7 +174,7 @@ private fun PowerTab(s: ServiceLocator) {
     GlassCard(strong = true) {
         Heading("Menu daya")
         Body("Reboot cepat ke mode apa pun tanpa kombinasi tombol. Semua aksi meminta konfirmasi.", dim = true)
-        if (!rootOk) Caption("Butuh root. Verifikasi dulu di Tools → Akses.")
+        if (!rootOk) Caption("Butuh root. Izinkan di root manager, lalu tekan Minta izin root di Tools → Akses.")
     }
     POWER_ACTIONS.forEach { a ->
         GlassCard(padding = 12.dp) {
