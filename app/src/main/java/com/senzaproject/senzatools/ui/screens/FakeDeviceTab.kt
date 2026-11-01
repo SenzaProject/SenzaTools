@@ -164,6 +164,21 @@ fun FakeDeviceTab(s: ServiceLocator) {
                     }
                 }, Modifier.weight(1f), enabled = !busy && tActive)
             }
+            if (ti.sdk >= 36) {
+                Heading("Profil game Android 16+ (Infinix GT 50 Pro)")
+                Caption("Mengikuti module yang sudah jalan di GT 50 Pro (144 fps): ro.product name/device/brand/manufacturer/model di main, odm, vendor, vendor_dlkm, bootimage ke X6891, cpu_info jadi Dimensity 8500 Ultimate, dan package_cache dibersihkan. Fingerprint tidak diubah. Selalu tetap setelah restart. Pakai Kembalikan ke asli untuk membatalkan.")
+                GlassButton("Terapkan profil GT 50 Pro", {
+                    scope.launch {
+                        busy = true; tMsg = null; failures = emptyList()
+                        val r = eng.applyTranssionProfile()
+                        tMsg = r.message
+                        failures = r.failures
+                        if (r.ok) needReboot = true
+                        tick++
+                        busy = false
+                    }
+                }, Modifier.fillMaxWidth(), primary = true, enabled = rootOk && !busy && ti.kind == FakeDeviceEngine.TranssionKind.CPU_INFO && ti.targets.isNotEmpty())
+            }
             tMsg?.let { Body(it) }
         }
     }

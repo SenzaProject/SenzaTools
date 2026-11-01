@@ -39,7 +39,9 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         /** Nilai ro.product.device asli perangkat ini; null = belum diketahui, Mode game dilewati untuk preset ini. */
         val codename: String? = null,
         /** Nilai ro.product.name asli; bila null dipakai [codename]. */
-        val productName: String? = null
+        val productName: String? = null,
+        /** Profil Transsion Android 16+: tulis persis set properti dari module referensi (lihat [TS_KEYS]), bukan set bawaan. */
+        val tsProfile: Boolean = false
     )
 
     /**
@@ -88,6 +90,15 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             Device("gt7p", "realme GT 7 Pro", "realme", "realme", "RMX5010")
         )
 
+        /**
+         * Profil khusus HP Transsion (Android 16+), mengikuti module yang sudah terbukti jalan di Infinix GT 50 Pro (X6891, 144 fps).
+         * Nilai diambil apa adanya dari module itu: name/device/brand/manufacturer/model. Tidak ada fingerprint, marketname,
+         * maupun properti SoC; nama chip ditulis lewat cpu_info (lihat [applyTranssion]).
+         */
+        val PROFILES = listOf(
+            Device("gt50p", "Infinix GT 50 Pro (profil Transsion)", "INFINIX", "INFINIX", "Infinix X6891", "Infinix-X6891", "X6891-OP", tsProfile = true)
+        )
+
         /** SoC kelas atas yang beredar saat ini (kode = nilai ro.soc.model / nomor model chip). */
         val SOCS = listOf(
             Soc("sd8ee6", "Snapdragon 8 Elite Extreme Gen 6", Vendor.QUALCOMM, "SM8975", "2nm, rilis September 2026"),
@@ -97,7 +108,8 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             Soc("d9600p", "Dimensity 9600 Pro", Vendor.MEDIATEK, "MT6995", "2nm, rilis September 2026", "mt6995"),
             Soc("d9500", "Dimensity 9500", Vendor.MEDIATEK, "MT6993", "3nm, rilis September 2025", "mt6993"),
             Soc("d9400p", "Dimensity 9400+", Vendor.MEDIATEK, "MT6991", "3nm, rilis 2025", "mt6991"),
-            Soc("d9300p", "Dimensity 9300+", Vendor.MEDIATEK, "MT6989", "4nm, rilis 2024", "mt6989")
+            Soc("d9300p", "Dimensity 9300+", Vendor.MEDIATEK, "MT6989", "4nm, rilis 2024", "mt6989"),
+            Soc("d8500u", "Dimensity 8500 Ultimate", Vendor.MEDIATEK, "MT6899", "dipakai Infinix GT 50 Pro")
         )
 
         private val PARTS = listOf("", "system.", "system_ext.", "vendor.", "odm.", "product.", "bootimage.")
@@ -124,8 +136,13 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
          */
         val FP_KEYS: List<String> = listOf("ro.build.fingerprint")
 
+        /** Partisi dan field yang ditulis profil Transsion (persis seperti module referensi; tanpa system/product/system_ext). */
+        private val TS_PARTS = listOf("", "odm.", "vendor.", "vendor_dlkm.", "bootimage.")
+        private val TS_FIELDS = listOf("name", "device", "brand", "manufacturer", "model")
+        val TS_KEYS: List<String> = TS_PARTS.flatMap { p -> TS_FIELDS.map { f -> "ro.product.$p$f" } } + "ro.product.otad.support"
+
         /** Semua properti yang boleh disentuh fitur ini (urutan tetap). */
-        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS + GAME_KEYS + FP_KEYS
+        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS + GAME_KEYS + FP_KEYS + TS_KEYS.filter { it !in (PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + GAME_KEYS) }
 
         private val TRANSSION_BRANDS = setOf("infinix", "tecno", "itel", "transsion")
         private const val PRODUCT_BUILD_PROP = "/product/etc/build.prop"
@@ -177,7 +194,7 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         private val SAFE_VALUE = Regex("^[A-Za-z0-9 ._+-]{1,48}$")
         private val SAFE_ID = Regex("^[A-Za-z0-9_-]{0,24}$")
 
-        fun device(id: String?): Device? = DEVICES.firstOrNull { it.id == id }
+        fun device(id: String?): Device? = (DEVICES + PROFILES).firstOrNull { it.id == id }
         fun soc(id: String?): Soc? = SOCS.firstOrNull { it.id == id }
 
         // ------------------------------------------------------------------ Reset konfigurasi game
@@ -225,7 +242,18 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         /** Daftar properti yang akan ditulis untuk pilihan ini (kosong bila keduanya null). */
         fun propsFor(device: Device?, soc: Soc?, deep: Boolean = false, game: Boolean = false): Map<String, String> {
             val m = linkedMapOf<String, String>()
-            if (device != null) {
+            if (device != null && device.tsProfile) {
+                val nm = device.productName ?: device.codename ?: device.model
+                val dv = device.codename ?: device.model
+                for (p in TS_PARTS) {
+                    m["ro.product.${p}name"] = nm
+                    m["ro.product.${p}device"] = dv
+                    m["ro.product.${p}brand"] = device.brand
+                    m["ro.product.${p}manufacturer"] = device.manufacturer
+                    m["ro.product.${p}model"] = device.model
+                }
+                m["ro.product.otad.support"] = "1"
+            } else if (device != null) {
                 for (p in PARTS) {
                     m["ro.product.${p}model"] = device.model
                     m["ro.product.${p}brand"] = device.brand
@@ -332,13 +360,14 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
     /** Terapkan pilihan (salah satu boleh null = tetap asli). Hasil diperiksa ulang oleh skrip. */
     suspend fun apply(device: Device?, soc: Soc?, persist: Boolean, deep: Boolean = false, game: Boolean = false, fingerprint: Boolean = false): Outcome {
         if (device == null && soc == null) return Outcome(false, "Pilih device atau SoC dulu, atau gunakan Kembalikan ke asli.", emptyList())
-        val gameOn = game && device?.codename != null
+        val gameOn = game && device?.tsProfile != true && device?.codename != null
         val fpOn = fingerprint && gameOn
         val props = propsFor(device, soc, deep, gameOn)
         val script = buildScript("apply", props, persist, device?.id, soc?.id, deep && props.keys.any { it in DEEP_KEYS }, gameOn, if (fpOn) device else null)
         val r = runScript(script, "terapkan fake device")
         val usedDeep = props.keys.any { it in DEEP_KEYS }
         val gameNote = when {
+            game && device?.tsProfile == true -> " Mode game tidak dipakai: profil Transsion sudah mengubah name/device."
             game && device == null -> " Mode game dilewati: pilih device dulu."
             game && device?.codename == null -> " Mode game dilewati: kode perangkat ${device?.marketName} belum diketahui, jadi tidak ada yang dikarang."
             fpOn -> " Fingerprint diubah: boot berikutnya (dan setelah dipulihkan) bisa lebih lama karena Android mengoptimalkan ulang aplikasi."
@@ -458,6 +487,25 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         } else {
             Outcome(false, "Gagal menulis ${failed.size} berkas: ${failed.first().second.take(140)}", failed.map { it.first })
         }
+    }
+
+    /**
+     * Profil game Transsion Android 16+ (mengikuti module Infinix GT 50 Pro): properti ro.product.* + otad, module boot
+     * (selalu tetap setelah restart), cpu_info "Dimensity 8500 Ultimate" lewat bind-mount, dan package_cache dibersihkan.
+     * Tidak mengubah fingerprint. "Kembalikan ke asli" memulihkan semuanya.
+     */
+    suspend fun applyTranssionProfile(): Outcome {
+        val info = transsionInfo()
+        if (!info.isTranssion) return Outcome(false, "Profil ini hanya untuk HP Transsion (Infinix/Tecno/itel).", emptyList())
+        if (info.kind != TranssionKind.CPU_INFO) return Outcome(false, "Profil ini khusus Android 16 ke atas (HP ini API ${info.sdk}).", emptyList())
+        val dev = PROFILES.first()
+        val soc = soc("d8500u") ?: return Outcome(false, "SoC profil tidak ditemukan.", emptyList())
+        val a = apply(dev, null, persist = true)
+        if (!a.ok) return a
+        val c = applyTranssion(soc)
+        val pc = access.runRootEdit("rm -rf /data/system/package_cache/*", "bersihkan package_cache", 15_000)
+        val tail = if (pc.ok) " package_cache dibersihkan (boot berikutnya sedikit lebih lama)." else " package_cache gagal dibersihkan (tidak fatal)."
+        return Outcome(c.ok, a.message + " " + c.message + tail, a.failures + c.failures)
     }
 
     /** Lepas penggantian berkas Transsion sehingga berkas asli terbaca lagi. */

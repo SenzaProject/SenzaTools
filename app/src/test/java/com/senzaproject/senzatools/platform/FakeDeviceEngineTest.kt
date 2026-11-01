@@ -158,4 +158,22 @@ class FakeDeviceEngineTest {
         val op = FakeDeviceEngine.device("op13")!!
         assertTrue(FakeDeviceEngine.propsFor(op, null, game = true).keys.none { it in FakeDeviceEngine.FP_KEYS })
     }
+
+    @Test fun transsionProfileMatchesReferenceModuleExactly() {
+        val d = FakeDeviceEngine.device("gt50p")!!
+        assertTrue(d.tsProfile)
+        assertTrue("profil tidak boleh muncul di daftar umum", FakeDeviceEngine.DEVICES.none { it.id == "gt50p" })
+        val m = FakeDeviceEngine.propsFor(d, null)
+        assertEquals(26, m.size)
+        assertEquals("X6891-OP", m["ro.product.name"])
+        assertEquals("Infinix-X6891", m["ro.product.vendor_dlkm.device"])
+        assertEquals("INFINIX", m["ro.product.bootimage.brand"])
+        assertEquals("Infinix X6891", m["ro.product.odm.model"])
+        assertEquals("1", m["ro.product.otad.support"])
+        assertTrue(m.keys.all { it in FakeDeviceEngine.ALL_KEYS })
+        // Tidak menyentuh marketname, fingerprint, SoC, platform/hardware, maupun partisi system/product/system_ext.
+        assertTrue(m.keys.none { it.endsWith("marketname") || it.startsWith("ro.soc") || it in FakeDeviceEngine.DEEP_KEYS || it in FakeDeviceEngine.FP_KEYS })
+        assertTrue(m.keys.none { it.startsWith("ro.product.system.") || it.startsWith("ro.product.system_ext.") || it.startsWith("ro.product.product.") })
+        assertTrue(FakeDeviceEngine.SOCS.any { it.id == "d8500u" && it.name == "Dimensity 8500 Ultimate" })
+    }
 }

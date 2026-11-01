@@ -39,6 +39,13 @@ Risiko, makanya default mati:
 - Device/name dipakai sebagian skrip vendor. Bila boot bermasalah: safe mode Magisk, atau hapus `/data/adb/modules/senza_fakedevice`.
 - Berbeda dengan Mode dalam, Mode game ikut **Tetap setelah restart**, karena Build.DEVICE harus sudah terisi sebelum zygote mulai.
 
+## Profil Transsion Android 16+ (Infinix GT 50 Pro)
+Di kartu Transsion (muncul otomatis, hanya Android 16+) ada tombol **Terapkan profil GT 50 Pro**. Isinya mengikuti module referensi yang sudah terbukti membuka 144 fps di GT 50 Pro:
+- `ro.product.{name,device,brand,manufacturer,model}` di main, `odm`, `vendor`, `vendor_dlkm`, `bootimage` = `X6891-OP` / `Infinix-X6891` / `INFINIX` / `INFINIX` / `Infinix X6891`, ditambah `ro.product.otad.support=1`. Partisi `system`, `system_ext`, `product` tidak disentuh.
+- `cpu_info` = `Dimensity 8500 Ultimate` lewat bind-mount (awalan vendor asli dipertahankan bila ada).
+- `/data/system/package_cache` dibersihkan. Boot berikutnya sedikit lebih lama.
+- Selalu tetap setelah restart. Fingerprint, marketname, dan properti SoC tidak diubah. **Kembalikan ke asli** membatalkan semuanya.
+
 ## Reset konfigurasi game
 Game menyimpan penilaian perangkat di datanya sendiri, jadi fake device baru terbaca setelah itu dibuang. Kartu **Reset konfigurasi game** menutup paksa game lalu menghapus `cache`, `code_cache`, dan (opsional) `shared_prefs` serta folder `Saved/Config` (Unreal Engine). OBB dan `Android/data/<paket>/files` tidak disentuh. Urutan: Terapkan, Restart, Reset game, buka game. Lokasi penyimpanan penilaian berbeda per game; bila satu game tetap membaca perangkat lama, lokasinya perlu ditambahkan.
 
