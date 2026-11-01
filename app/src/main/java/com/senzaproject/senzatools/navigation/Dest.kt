@@ -16,7 +16,7 @@ enum class Dest(val label: String, val icon: ImageVector) {
     ANALYZER("Analyzer", Icons.Rounded.Analytics),
     TOOLS("Tools", Icons.Rounded.Build),
     TOOLKIT("Toolkit", Icons.Rounded.Widgets),
-    SETTINGS("Settings", Icons.Rounded.Settings)
+    SETTINGS("Settings", Icons.Rounded.Settings);
 
     companion object {
         /** Tujuan yang tampil di bar navigasi (Settings dibuka dari Home). */
