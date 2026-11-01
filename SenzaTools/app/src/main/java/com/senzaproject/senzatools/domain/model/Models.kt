@@ -41,7 +41,9 @@ data class BatterySnapshot(
     val cycleCount: Int?,
     val capacityMah: Int?,
     val capacityNote: String?,
-    val isCharging: Boolean
+    val isCharging: Boolean,
+    /** Kapasitas penuh aktual ÷ kapasitas desain (sysfs), dalam persen; null bila node tidak tersedia. */
+    val healthPercent: Float? = null
 )
 
 data class CpuCore(

@@ -147,8 +147,9 @@ private fun FilesTab(s: ServiceLocator) {
     var quickFound by remember { mutableStateOf<List<String>?>(null) }
     var parts by remember { mutableStateOf<List<RootEditor.PartInfo>?>(null) }
     var overlays by remember { mutableStateOf<List<String>?>(null) }
-    val modeNames = listOf("Otomatis", "Langsung", "Overlay Magisk")
-    val modes = listOf(ApplyMode.AUTO, ApplyMode.DIRECT, ApplyMode.OVERLAY)
+    var rebootAfter by remember { mutableStateOf(true) }
+    val modeNames = listOf("Otomatis", "Langsung", "Bind-mount", "Module Magisk")
+    val modes = listOf(ApplyMode.AUTO, ApplyMode.DIRECT, ApplyMode.BIND, ApplyMode.OVERLAY)
 
     fun open(p: String, fallbackRead: Boolean = false) {
         scope.launch {
@@ -253,7 +254,7 @@ private fun FilesTab(s: ServiceLocator) {
     }
     GlassCard {
         Heading("Partisi")
-        Body("Menampilkan partisi di perangkat, termasuk Transsion (tr_product, tr_region, tr_manifest, tr_system, tr_overlayfs, tr_preload) baik di root maupun di dalam /system (mis. /system/tr_product).", dim = true)
+        Body("Memindai semua mount erofs/ext4/f2fs/squashfs di perangkat plus folder berisi build.prop: system, vendor, product, odm, Transsion (tr_*), Oplus (my_*), dan partisi lain, baik di root maupun di dalam /system.", dim = true)
         GlassButton("Pindai partisi", {
             scope.launch {
                 busy = true
@@ -266,11 +267,12 @@ private fun FilesTab(s: ServiceLocator) {
             list.forEach { pi ->
                 Column(Modifier.fillMaxWidth().clickableNoRipple { open(pi.path, true) }) {
                     Mono(pi.path, size = 12)
-                    Caption("${pi.fs} · ${if (pi.readOnly) "hanya-baca" else "rw"} · mount ${pi.mountPoint}${if (pi.overlayOk) "" else " · overlay lewat bind-mount"}")
+                    Caption("${pi.fs} · ${if (pi.readOnly) "hanya-baca" else "rw"} · mount ${pi.mountPoint}")
+                    if (pi.suggest.isNotEmpty()) Caption("Metode cocok: ${pi.suggest}")
                     if (pi.aliases.isNotEmpty()) Caption("juga muncul sebagai: ${pi.aliases.joinToString(", ")}")
                 }
             }
-            Caption("${list.size} partisi unik (path symlink digabung). Tap partisi untuk membuka isinya, mis. tr_product/etc/build.prop. Partisi erofs/squashfs tidak bisa ditulis; hasil edit dipasang lewat overlay/bind-mount module Magisk/KernelSU/APatch.")
+            Caption("${list.size} partisi unik (path symlink digabung). Tap partisi untuk membuka isinya, mis. tr_product/etc/build.prop. Partisi erofs/squashfs tidak bisa ditulis; hasil edit dipasang lewat bind-mount (tanpa Magisk) dan tetap aktif setelah restart.")
         }
     }
 
@@ -281,7 +283,9 @@ private fun FilesTab(s: ServiceLocator) {
             GlassButton("Pindai file", {
                 scope.launch {
                     busy = true
-                    quickFound = s.access.existingFiles(QUICK_FILES, asRoot)
+                    val extra = (parts ?: editor.listPartitions(asRoot).also { parts = it })
+                        .flatMap { listOf("${it.path}/build.prop", "${it.path}/etc/build.prop") }
+                    quickFound = s.access.existingFiles((QUICK_FILES + extra).distinct(), asRoot)
                     busy = false
                 }
             }, Modifier.weight(1f), primary = true, enabled = !busy)
@@ -303,17 +307,18 @@ private fun FilesTab(s: ServiceLocator) {
     error?.let { ErrorCard(it) }
 
     if (confirmApply) ConfirmDialog(
-        title = "Terapkan perubahan & restart?",
-        message = "${pending.size} file akan diterapkan dengan mode ${modeNames[modeIdx]} (backup otomatis disimpan di aplikasi), lalu perangkat RESTART SENDIRI.\n\n" + pending.joinToString("\n") { "• ${it.path}" } +
+        title = if (rebootAfter) "Terapkan perubahan & restart?" else "Terapkan perubahan?",
+        message = "${pending.size} file akan diterapkan dengan mode ${modeNames[modeIdx]} (backup otomatis disimpan di aplikasi)" +
+            (if (rebootAfter) ", lalu perangkat RESTART SENDIRI.\n\n" else ", tanpa restart.\n\n") + pending.joinToString("\n") { "• ${it.path}" } +
             "\n\nKesalahan di file sistem (mis. build.prop atau XML) bisa menyebabkan bootloop. Pastikan kamu punya cara pemulihan (recovery/backup). Simpan pekerjaan di aplikasi lain dulu.",
-        confirmText = "Terapkan & restart",
+        confirmText = if (rebootAfter) "Terapkan & restart" else "Terapkan",
         danger = true,
         onConfirm = {
             confirmApply = false
             scope.launch {
                 busy = true
                 lastApply = null
-                val r = editor.apply(modes[modeIdx]) { applyMsg = it }
+                val r = editor.apply(modes[modeIdx], reboot = rebootAfter) { applyMsg = it }
                 lastApply = r
                 applyMsg = buildString {
                     if (r.applied.isNotEmpty()) {
@@ -321,11 +326,14 @@ private fun FilesTab(s: ServiceLocator) {
                         if (r.live.isNotEmpty()) append(" ${r.live.size} file sudah terlihat berubah di partisi asli sekarang (diverifikasi dengan cmp).")
                         val notLive = r.applied.size - r.live.size
                         if (notLive > 0) append(" $notLive file baru berlaku setelah restart.")
-                        if (r.overlaid.isNotEmpty()) append(" (${r.overlaid.size} lewat overlay/bind-mount module)")
                         append("\n")
+                        r.methods.forEach { (f, m) -> append("• $f → $m\n") }
+                        if (r.propsSet > 0) append("${r.propsSet} properti dipasang lewat resetprop (langsung terlihat di getprop dan dipasang ulang tiap boot).\n")
+                        if (r.overlaid.isNotEmpty()) append("Hasil edit bind-mount/overlay dipasang ulang otomatis saat boot (post-fs-data.d, service.d, dan penerima boot aplikasi).\n")
                     }
+                    r.notes.forEach { append("Catatan: $it\n") }
                     if (r.failed.isNotEmpty()) {
-                        append("Tidak ada restart karena ada yang gagal:\n")
+                        append(if (rebootAfter) "Tidak ada restart karena ada yang gagal:\n" else "Ada yang gagal:\n")
                         r.failed.forEach { append("• ${it.first}: ${it.second}\n") }
                     }
                     r.rebootError?.let { append(it) }
@@ -371,11 +379,13 @@ private fun FilesTab(s: ServiceLocator) {
             Caption("Mode terapkan")
             ChipRow(modeNames, modeIdx) { modeIdx = it }
             Caption(when (modeIdx) {
-                0 -> "Otomatis: tulis langsung; bila partisi erofs/hanya-baca, otomatis pakai overlay Magisk."
-                1 -> "Langsung: tulis ke partisi asli (remount rw). Gagal di partisi erofs."
-                else -> "Overlay: partisi asli tidak disentuh. File ditaruh di module systemless (/data/adb/modules/senza_edit), butuh Magisk/KernelSU/APatch."
+                0 -> "Otomatis: tulis langsung bila partisi bisa ditulis (rw atau bisa di-remount); jika tidak, bind-mount (partisi apa pun, tanpa Magisk); terakhir module Magisk."
+                1 -> "Langsung: tulis ke partisi asli (remount rw). Gagal di partisi erofs/squashfs."
+                2 -> "Bind-mount: file hasil edit disimpan di /data/adb/senza_edit lalu dipasang di atas file asli. Bekerja di partisi apa pun dan dengan root manager apa pun; dipasang ulang tiap boot."
+                else -> "Module Magisk: partisi asli tidak disentuh; file ditaruh di module systemless (/data/adb/modules/senza_edit). Butuh Magisk/KernelSU/APatch dan hanya untuk /system, /vendor, /product, /system_ext, /odm."
             })
-            GlassButton("Terapkan perubahan (restart)", { confirmApply = true }, Modifier.fillMaxWidth(), primary = true, danger = true, enabled = rootOk && !busy)
+            Chip(if (rebootAfter) "Restart otomatis setelah berhasil: AKTIF" else "Restart otomatis setelah berhasil: MATI", rebootAfter) { rebootAfter = !rebootAfter }
+            GlassButton(if (rebootAfter) "Terapkan perubahan (restart)" else "Terapkan perubahan", { confirmApply = true }, Modifier.fillMaxWidth(), primary = true, danger = true, enabled = rootOk && !busy)
             if (!rootOk) Caption("Root belum aktif. Izinkan di root manager, lalu tekan Minta izin root di tab Akses.")
         }
         applyMsg?.let { Body(it) }
@@ -392,25 +402,25 @@ private fun FilesTab(s: ServiceLocator) {
         }
     }
 
-    if (rootOk) ExpandableCard("Overlay Magisk (hasil edit)", false, trailing = overlays?.size?.toString()) {
-        Caption("File yang saat ini di-overlay oleh Senza Tools. Menghapus overlay langsung mengembalikan file asli (bind-mount dilepas) dan tidak dipasang lagi saat boot.")
-        GlassButton("Muat daftar overlay", { scope.launch { overlays = editor.overlays() } }, enabled = !busy)
+    if (rootOk) ExpandableCard("Hasil edit aktif (bind-mount / overlay)", false, trailing = overlays?.size?.toString()) {
+        Caption("File yang saat ini diganti oleh Senza Tools. Menghapus langsung mengembalikan file asli (bind-mount dilepas) dan tidak dipasang lagi saat boot. Properti yang sudah terpasang lewat resetprop kembali ke nilai asli setelah restart.")
+        GlassButton("Muat daftar", { scope.launch { overlays = editor.overlays() } }, enabled = !busy)
         overlays?.let { list ->
-            if (list.isEmpty()) Body("Belum ada overlay.", dim = true)
+            if (list.isEmpty()) Body("Belum ada hasil edit aktif.", dim = true)
             list.forEach { p ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Mono(p, Modifier.weight(1f), 11)
                     GlassButton("Hapus", {
                         scope.launch {
                             val ok = editor.removeOverlay(p)
-                            if (!ok) error = "Gagal menghapus overlay."
+                            if (!ok) error = "Gagal menghapus hasil edit."
                             overlays = editor.overlays()
                         }
                     }, danger = true, enabled = !busy)
                 }
             }
         }
-        Caption("Jika terjadi bootloop setelah overlay: nonaktifkan/hapus module \"Senza Tools Edit Overlay\" lewat recovery atau mode aman Magisk.")
+        Caption("Jika terjadi bootloop setelah bind-mount: hapus /data/adb/post-fs-data.d/senza_edit.sh dan /data/adb/service.d/senza_edit.sh lewat recovery (TWRP) atau mode aman root manager, dan nonaktifkan izin boot aplikasi. Untuk module Magisk: nonaktifkan module \"Senza Tools Edit Overlay\".")
     }
 
     content?.let { (title, body) ->

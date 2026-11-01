@@ -47,3 +47,7 @@ Gunakan Personal Access Token GitHub sebagai password.
 - [docs/FEATURES.md](docs/FEATURES.md) — fitur dan batasannya
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — struktur dan keputusan desain
 - [docs/SECURITY.md](docs/SECURITY.md) — model keamanan dan privasi
+
+
+## Terapkan edit file
+Lihat `PATCH_TERAPKAN_EDIT.md` untuk mode Otomatis/Langsung/Bind-mount/Module Magisk, persistensi tanpa Magisk, dan persen kesehatan baterai.

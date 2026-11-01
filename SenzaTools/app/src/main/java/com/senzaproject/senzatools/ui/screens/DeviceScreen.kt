@@ -26,6 +26,7 @@ import com.senzaproject.senzatools.ui.components.ChipRow
 import com.senzaproject.senzatools.ui.components.ExpandableCard
 import com.senzaproject.senzatools.ui.components.GlassButton
 import com.senzaproject.senzatools.ui.components.GlassCard
+import com.senzaproject.senzatools.ui.components.GlassTextField
 import com.senzaproject.senzatools.ui.components.Heading
 import com.senzaproject.senzatools.ui.components.InfoSectionCard
 import com.senzaproject.senzatools.ui.components.KeyValue
@@ -96,6 +97,7 @@ private fun BatteryHealthCard(s: ServiceLocator) {
     var info by remember { mutableStateOf<BatteryHealthInfo?>(null) }
     var busy by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var designText by remember { mutableStateOf(s.batteryHealth.savedDesignMah()?.roundToInt()?.toString() ?: "") }
 
     suspend fun load() {
         busy = true
@@ -117,10 +119,19 @@ private fun BatteryHealthCard(s: ServiceLocator) {
         } else {
             val pr = i.primary
             if (pr != null) {
-                Title("${pr.percent.f1()} %")
+                Title(if (pr.estimate) "≈ ${pr.percent.f1()} %" else "${pr.percent.f1()} %")
+                if (pr.estimate) StatusPill("PERKIRAAN, bukan pembacaan langsung", g.warn)
                 Caption("Dihitung dari ${pr.label} · ${pr.detail}")
             } else {
                 Body(i.missing ?: "Tidak tersedia", dim = true)
+            }
+            if (pr == null || pr.estimate) {
+                Body("Perangkat ini tidak mengekspos kapasitas desain. Masukkan kapasitas desain baterai (mAh, sesuai spesifikasi/label baterai) agar persen kesehatan bisa diperkirakan dari charge counter.", dim = true)
+                GlassTextField(designText, { designText = it.filter { c -> c.isDigit() }.take(5) }, "Kapasitas desain (mAh)")
+                GlassButton("Simpan & hitung", {
+                    s.batteryHealth.saveDesignMah(designText.toFloatOrNull())
+                    scope.launch { load() }
+                }, enabled = !busy && designText.isNotBlank())
             }
             KeyValue("Kapasitas penuh (aktual)", mahText(i.fullMah))
             KeyValue("Kapasitas desain", mahText(i.designMah))

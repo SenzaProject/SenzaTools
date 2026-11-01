@@ -469,12 +469,14 @@ class DeviceRepository(private val ctx: Context) {
         // Kapasitas hanya dari sysfs (tanpa perkiraan). Satuan kernel bisa µAh atau mAh; rasio tidak terpengaruh satuan.
         var capacity: Int? = null
         var note: String? = null
+        var healthPct: Float? = null
         val full = Sys.readLong("/sys/class/power_supply/battery/charge_full")
         val design = Sys.readLong("/sys/class/power_supply/battery/charge_full_design")
         fun mah(raw: Long): Int = if (raw >= 100_000L) (raw / 1000).toInt() else raw.toInt()
         if (full != null && full > 0) {
             capacity = mah(full)
             note = if (design != null && design > 0) "charge_full ${mah(full)} mAh dari desain ${mah(design)} mAh (${(full * 100f / design).f1()} %)" else "charge_full dari sysfs"
+            if (design != null && design > 0) healthPct = (full * 100f / design).takeIf { it in 10f..150f }
         }
         return BatterySnapshot(
             percent = pct,
@@ -489,7 +491,8 @@ class DeviceRepository(private val ctx: Context) {
             cycleCount = cycle,
             capacityMah = capacity,
             capacityNote = note,
-            isCharging = charging
+            isCharging = charging,
+            healthPercent = healthPct
         )
     }
 
@@ -501,6 +504,7 @@ class DeviceRepository(private val ctx: Context) {
                     InfoRow("Level", "${b.percent} %"),
                     InfoRow("Status", b.status),
                     InfoRow("Sumber daya", b.plugged),
+                    InfoRow("Kesehatan baterai", b.healthPercent?.let { "${it.f1()} %" } ?: "Tidak tersedia di node ini (lihat kartu Kesehatan baterai di atas)"),
                     InfoRow("Status kesehatan (sistem)", b.health),
                     InfoRow("Suhu", b.tempC?.let { "${it.f1()} °C" } ?: na),
                     InfoRow("Tegangan", b.voltageMv?.let { "$it mV" } ?: na),

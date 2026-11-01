@@ -38,6 +38,37 @@ class BatteryHealthReader(private val ctx: Context, private val access: AccessMa
             sticky?.getIntExtra("android.os.extra.CYCLE_COUNT", -1)?.takeIf { it >= 0 }
         } else null
 
-        BatteryHealth.compute(BatteryHealth.parse(out), apiSoh, apiCycles, useRoot)
+        val info = BatteryHealth.compute(BatteryHealth.parse(out), apiSoh, apiCycles, useRoot)
+        if (info.primary != null) return@withContext info
+
+        // Tidak ada sumber langsung: pakai PERKIRAAN bila pengguna memasukkan kapasitas desain baterainya.
+        val design = savedDesignMah()
+        val counter = if (bm != null) try {
+            bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER).takeIf { it != Long.MIN_VALUE && it > 0 }
+        } catch (_: Throwable) {
+            null
+        } else null
+        val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 }
+        val est = BatteryHealth.estimate(counter, level, design)
+        when {
+            est != null -> info.copy(
+                primary = est, missing = null,
+                designMah = design,
+                notes = info.notes + "Angka ini PERKIRAAN: perangkat ini tidak menyediakan kapasitas desain/SOH di sysfs. Isi kapasitas desain sesuai spesifikasi baterai, dan ukur saat level 50–100 % agar lebih akurat."
+            )
+            design != null -> info.copy(
+                notes = info.notes + "Perkiraan belum bisa dihitung: charge counter tidak terbaca, level di bawah 20 %, atau hasil tidak masuk akal (kapasitas desain salah?)."
+            )
+            else -> info
+        }
+    }
+
+    private val prefs get() = ctx.getSharedPreferences("senza_battery", Context.MODE_PRIVATE)
+
+    /** Kapasitas desain (mAh) yang dimasukkan pengguna untuk perkiraan, atau null. */
+    fun savedDesignMah(): Float? = prefs.getFloat("design_mah", 0f).takeIf { it > 0f }
+
+    fun saveDesignMah(v: Float?) {
+        prefs.edit().apply { if (v == null || v <= 0f) remove("design_mah") else putFloat("design_mah", v) }.apply()
     }
 }

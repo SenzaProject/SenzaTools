@@ -59,6 +59,10 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
     val access by s.access.state.collectAsState()
     var diagBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val rootOk = s.access.isRootVerified
+    var health by remember { mutableStateOf<com.senzaproject.senzatools.data.BatteryHealthInfo?>(null) }
+    // Dibaca ulang saat root disetujui (root diminta async saat aplikasi dibuka).
+    LaunchedEffect(rootOk) { health = withContext(Dispatchers.IO) { s.batteryHealth.read(rootOk) } }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -98,6 +102,12 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                     RingGauge(d.bat.percent.toFloat(), "Baterai", "${d.bat.status}${d.bat.tempC?.let { " · ${it.f1()}°C" } ?: ""}")
                     RingGauge(d.sto.percent, "Storage", "${d.sto.freeBytes.formatBytes()} bebas")
                 }
+                val hp = health?.primary
+                KeyValue(
+                    "Kesehatan baterai",
+                    hp?.let { (if (it.estimate) "≈ " else "") + "${it.percent.f1()} %" + (if (it.estimate) " (perkiraan)" else "") }
+                        ?: (d.bat.healthPercent?.let { "${it.f1()} %" } ?: if (health == null) "Membaca…" else "Tidak tersedia · buka Device → Baterai")
+                )
             }
         }
 

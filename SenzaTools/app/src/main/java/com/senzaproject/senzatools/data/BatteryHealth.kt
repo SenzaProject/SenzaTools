@@ -3,7 +3,7 @@ package com.senzaproject.senzatools.data
 import com.senzaproject.senzatools.domain.model.InfoRow
 
 /** Satu angka kesehatan baterai beserta asal-usulnya. */
-data class HealthSource(val label: String, val percent: Float, val detail: String)
+data class HealthSource(val label: String, val percent: Float, val detail: String, val estimate: Boolean = false)
 
 /**
  * Hasil pembacaan kesehatan baterai. Semua angka berasal dari node/API yang benar-benar terbaca;
@@ -130,6 +130,25 @@ object BatteryHealth {
     private fun toMah(raw: Double): Float = (if (raw >= 100_000.0) raw / 1000.0 else raw).toFloat()
 
     private fun fmt1(v: Float): String = String.format(java.util.Locale.US, "%.1f", v)
+
+    /**
+     * PERKIRAAN (bukan pembacaan langsung) untuk perangkat yang tidak mengekspos kapasitas desain/SOH:
+     * kapasitas penuh ≈ charge counter ÷ level × 100, dibandingkan dengan kapasitas desain yang DIMASUKKAN PENGGUNA.
+     * Akurasi bergantung pada gauge baterai; makin rendah level, makin besar galat. Dipakai hanya bila level ≥ 20 %.
+     */
+    fun estimate(chargeCounterUah: Long?, levelPct: Int?, designMah: Float?): HealthSource? {
+        if (chargeCounterUah == null || chargeCounterUah <= 0 || levelPct == null || levelPct < 20 || designMah == null || designMah <= 0f) return null
+        val counterMah = chargeCounterUah / 1000.0
+        val fullMah = counterMah * 100.0 / levelPct
+        val pct = (fullMah * 100.0 / designMah).toFloat()
+        if (pct !in 30f..130f) return null
+        return HealthSource(
+            "perkiraan: charge counter ÷ level",
+            pct,
+            "${fmt1(counterMah.toFloat())} mAh pada $levelPct % → kapasitas penuh ≈ ${fmt1(fullMah.toFloat())} mAh dari desain ${fmt1(designMah)} mAh",
+            estimate = true
+        )
+    }
 
     /**
      * @param apiSoh nilai BatteryManager STATE_OF_HEALTH (Android 14+) atau null bila tidak ada.
