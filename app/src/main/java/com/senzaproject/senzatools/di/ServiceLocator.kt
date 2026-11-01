@@ -25,6 +25,7 @@ class ServiceLocator(val app: Application) {
     val updates by lazy { com.senzaproject.senzatools.update.UpdateChecker(app) }
     val display by lazy { com.senzaproject.senzatools.platform.root.DisplayTuner(app, access) }
     val booster by lazy { com.senzaproject.senzatools.platform.root.Booster(app, access) }
+    val zram by lazy { com.senzaproject.senzatools.platform.root.ZramTuner(app, access) }
     val diagnostics by lazy { SmartDiagnostics(app, device) }
     val monitor by lazy { PerformanceMonitor(device, access) }
     val history by lazy { HistoryStore(app) }

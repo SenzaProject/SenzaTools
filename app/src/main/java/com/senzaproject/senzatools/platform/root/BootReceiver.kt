@@ -21,7 +21,8 @@ class BootReceiver : BroadcastReceiver() {
                     listOf(
                         "su", "-c",
                         "for b in /data/adb/senza_edit /data/local/senza_edit; do [ -f \"\$b/senza_apply.sh\" ] && sh \"\$b/senza_apply.sh\"; done; " +
-                            "[ -f /data/adb/senza_kernel/boot.sh ] && sh /data/adb/senza_kernel/boot.sh; true"
+                            "[ -f /data/adb/senza_kernel/boot.sh ] && sh /data/adb/senza_kernel/boot.sh; " +
+                            "[ -f /data/adb/senza_zram/boot.sh ] && sh /data/adb/senza_zram/boot.sh; true"
                     ),
                     20_000
                 )
