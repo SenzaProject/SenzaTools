@@ -44,6 +44,7 @@ Gunakan Personal Access Token GitHub sebagai password.
 - Uji pada Android 12–16 menjadi target; kompatibilitas aktual bergantung vendor dan tingkat akses.
 
 ## Dokumentasi
+- [docs/UNPACK_REPACK.md](docs/UNPACK_REPACK.md) — fitur Unpack & Repack ROM (Toolkit)
 - [docs/FEATURES.md](docs/FEATURES.md) — fitur dan batasannya
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — struktur dan keputusan desain
 - [docs/SECURITY.md](docs/SECURITY.md) — model keamanan dan privasi
