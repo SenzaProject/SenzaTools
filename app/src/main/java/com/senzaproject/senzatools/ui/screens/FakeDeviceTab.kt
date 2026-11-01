@@ -43,6 +43,8 @@ fun FakeDeviceTab(s: ServiceLocator) {
     var socId by rememberSaveable { mutableStateOf<String?>(null) }
     var persist by rememberSaveable { mutableStateOf(true) }
     var deep by rememberSaveable { mutableStateOf(false) }
+    var game by rememberSaveable { mutableStateOf(false) }
+    var fpToo by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var failures by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -55,6 +57,11 @@ fun FakeDeviceTab(s: ServiceLocator) {
     var tInfo by remember { mutableStateOf<FakeDeviceEngine.TranssionInfo?>(null) }
     var tActive by remember { mutableStateOf(false) }
     var tMsg by remember { mutableStateOf<String?>(null) }
+    var gamePkg by rememberSaveable { mutableStateOf("") }
+    var resetFull by rememberSaveable { mutableStateOf(true) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var resetMsg by remember { mutableStateOf<String?>(null) }
+    var resetOk by remember { mutableStateOf(true) }
 
     LaunchedEffect(rootOk, tick) {
         if (rootOk) {
@@ -67,6 +74,8 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 if (deviceId == null) deviceId = cur.deviceId
                 if (socId == null) socId = cur.socId
                 deep = cur.deep
+                game = cur.game
+                fpToo = cur.fingerprint
             }
         }
     }
@@ -86,7 +95,7 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 st0 == null -> Caption("Memeriksa status…")
                 st0.resetprop == null -> StatusPill("resetprop tidak ditemukan", g.bad)
                 activeDevice != null || activeSoc != null -> StatusPill(
-                    "Aktif: " + listOfNotNull(activeDevice?.marketName, activeSoc?.name).joinToString(" + ") + if (st0.deep) " (Mode dalam)" else "",
+                    "Aktif: " + listOfNotNull(activeDevice?.marketName, activeSoc?.name).joinToString(" + ") + (if (st0.deep) " (Mode dalam)" else "") + (if (st0.game) " (Mode game" + (if (st0.fingerprint) " + fingerprint" else "") + ")" else ""),
                     g.warn
                 )
                 else -> StatusPill("Tidak ada penyamaran aktif", g.good)
@@ -99,7 +108,7 @@ fun FakeDeviceTab(s: ServiceLocator) {
         Caption("Model asli perangkat kelas atas dari berbagai merek.")
         ChoiceRow("Device asli (tidak diubah)", null, deviceId == null) { deviceId = null }
         FakeDeviceEngine.DEVICES.forEach { d ->
-            ChoiceRow(d.marketName, "${d.brand} · ${d.model}", deviceId == d.id) { deviceId = d.id }
+            ChoiceRow(d.marketName, "${d.brand} · ${d.model}" + (d.codename?.let { " · $it" } ?: ""), deviceId == d.id) { deviceId = d.id }
         }
     }
 
@@ -179,11 +188,29 @@ fun FakeDeviceTab(s: ServiceLocator) {
         if (deep && selSoc != null && selSoc.platform == null) {
             Caption("Kode platform ${selSoc.name} belum diketahui, Mode dalam dilewati. Untuk DevCheck pilih Snapdragon 8 Elite / 8 Elite Gen 5 atau Dimensity 9600 Pro / 9500 / 9400+ / 9300+.", color = g.warn)
         }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Body("Mode game (ubah kode device)")
+                Caption("Juga mengubah ro.product.device dan ro.product.name, karena banyak game memilih profil grafis dari Build.DEVICE, bukan Build.MODEL. Hanya untuk device yang tertera kodenya di daftar. Ikut Tetap setelah restart. Bila boot bermasalah: masuk safe mode Magisk atau hapus /data/adb/modules/senza_fakedevice.")
+            }
+            Switch(game, { game = it; if (!it) fpToo = false })
+        }
+        val selDev = FakeDeviceEngine.device(deviceId)
+        if (game && (selDev == null || selDev.codename == null)) {
+            Caption(if (selDev == null) "Mode game butuh device yang dipilih." else "Kode asli ${selDev.marketName} belum diketahui, Mode game dilewati (tidak dikarang). Pilih OnePlus 13 atau Pixel 10 Pro XL.", color = g.warn)
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Body("Ubah fingerprint juga")
+                Caption("Mengganti merek/nama/device di depan fingerprint asli HP-mu (versi dan build id tetap). Android mengira ada pembaruan: boot berikutnya dan setelah Kembalikan ke asli bisa beberapa menit karena aplikasi dioptimalkan ulang. Play Integrity hampir pasti gagal. Nyalakan hanya bila Mode game saja belum cukup.", color = if (fpToo) g.warn else null)
+            }
+            Switch(fpToo, { fpToo = it }, enabled = game)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassButton("Terapkan", {
                 scope.launch {
                     busy = true; msg = null; failures = emptyList()
-                    val r = eng.apply(FakeDeviceEngine.device(deviceId), FakeDeviceEngine.soc(socId), persist, deep)
+                    val r = eng.apply(FakeDeviceEngine.device(deviceId), FakeDeviceEngine.soc(socId), persist, deep, game, fpToo && game)
                     msg = r.message
                     failures = r.failures
                     if (r.ok) needReboot = true
@@ -203,6 +230,21 @@ fun FakeDeviceTab(s: ServiceLocator) {
         }
     }
 
+    GlassCard {
+        Heading("Reset konfigurasi game (tanpa hapus data)")
+        Caption("Game menilai perangkat sekali lalu menyimpan hasilnya (tingkat grafis, FPS) di datanya sendiri, jadi fake device baru terbaca setelah itu dihapus. Fitur ini hanya membuang penilaian itu, bukan resource unduhan (OBB dan Android/data/<paket>/files), jadi tidak perlu unduh ulang. Urutan: Terapkan, Restart, lalu Reset game ini, lalu buka game.")
+        GlassTextField(gamePkg, { gamePkg = it.trim() }, "Nama paket, mis. com.mobile.legends", mono = true)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Body("Hapus juga pengaturan dan config grafis")
+                Caption("Aktif (disarankan): hapus cache + shared_prefs + folder Saved/Config. Mati: hanya cache. Aktif bisa membuat game minta login ulang dan mengembalikan pengaturan grafis ke awal.")
+            }
+            Switch(resetFull, { resetFull = it })
+        }
+        GlassButton("Reset game ini", { confirmReset = true }, Modifier.fillMaxWidth(), primary = true, enabled = rootOk && !busy && gamePkg.isNotBlank())
+        resetMsg?.let { Body(it, color = if (resetOk) null else g.bad) }
+    }
+
     ExpandableCard("Catatan penting", false) {
         Body("• Game membaca model saat perangkat menyala, jadi perubahan baru terlihat penuh setelah restart. Setelah restart, buka game dan cek pengaturan grafis.", dim = true)
         Body("• Yang berubah hanya nama yang dilaporkan sistem. Performa CPU/GPU asli tetap. Grafis maksimal di HP lemah bisa lag, panas, atau FC.", dim = true)
@@ -210,6 +252,8 @@ fun FakeDeviceTab(s: ServiceLocator) {
         Body("• DevCheck membaca nama chip dari platform/hardware, tetapi detail inti CPU (mis. 6× Cortex-A55 + 2× Cortex-A76), GPU (Mali), dan /proc/cpuinfo dibaca dari kernel dan tidak bisa dipalsukan lewat properti.", dim = true)
         Body("• DevCheck memakai database chip sendiri; chip yang sangat baru bisa tampil Unknown. Hasil terbaik: Snapdragon 8 Elite / 8 Elite Gen 5 atau Dimensity 9600 Pro / 9500 / 9400+ / 9300+. Tutup paksa DevCheck sebelum membuka lagi.", dim = true)
         Body("• Aplikasi bank dan pengecekan integritas (Play Integrity) bisa menolak perangkat yang modelnya diubah. Kembalikan ke asli bila perlu.", dim = true)
+        Body("• Kalau game tetap membaca perangkat lama setelah restart, itu karena game menyimpan penilaian perangkat di datanya. Pakai Reset konfigurasi game di atas, bukan hapus data. Game yang membaca GL_RENDERER atau /proc/cpuinfo tetap melihat perangkat asli dan tidak terbantu fitur ini.", dim = true)
+        Body("• Urutan bila game tetap membaca perangkat lama: aktifkan Mode game (dan fingerprint hanya bila perlu), Terapkan, Restart, lalu Reset konfigurasi game. Fingerprint tidak dikarang dari nol; hanya tiga bagian depan fingerprint aslimu yang diganti.", dim = true)
         Body("• Aturan akun game berbeda-beda; memakai penyamaran perangkat tanggung jawab sendiri.", dim = true)
     }
 
@@ -236,6 +280,29 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 }
             },
             onDismiss = { confirmRestore = false }
+        )
+    }
+
+    if (confirmReset) {
+        ConfirmDialog(
+            title = "Reset konfigurasi game?",
+            message = "Game $gamePkg akan ditutup paksa lalu cache" + (if (resetFull) ", pengaturan, dan config grafisnya" else "-nya") + " dihapus. OBB dan data unduhan tidak disentuh. Akun bisa minta login ulang.",
+            confirmText = "Reset",
+            danger = true,
+            onConfirm = {
+                confirmReset = false
+                scope.launch {
+                    busy = true; resetMsg = null
+                    val r = eng.resetGameConfig(
+                        gamePkg,
+                        if (resetFull) FakeDeviceEngine.ResetLevel.CONFIG else FakeDeviceEngine.ResetLevel.CACHE
+                    )
+                    resetOk = r.ok
+                    resetMsg = r.message
+                    busy = false
+                }
+            },
+            onDismiss = { confirmReset = false }
         )
     }
 

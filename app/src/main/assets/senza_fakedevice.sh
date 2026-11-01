@@ -7,6 +7,8 @@ PERSIST=#PERSIST#
 DEVICE_ID='#DEVICE_ID#'
 SOC_ID='#SOC_ID#'
 DEEP=#DEEP#
+GAME=#GAME#
+FP=#FP#
 
 RP=""
 for c in /data/adb/magisk/resetprop /data/adb/ksu/bin/resetprop /data/adb/ap/bin/resetprop /system/bin/resetprop resetprop; do
@@ -39,6 +41,25 @@ setp() {
   if [ "$(getprop "$1")" = "$2" ]; then echo "OK $1"; else echo "GAGAL $1"; fi
 }
 
+# Ganti tiga bagian depan fingerprint ASLI (merek/nama/device); sisanya (versi, build id, tags) tetap milik perangkat ini.
+# Hasil yang berhasil dicatat di fp.conf agar ikut ke module boot.
+fpset() {
+  k="$1"; b="$2"; n="$3"; d="$4"
+  line=$(grep "^$k=" "$D/orig.conf" | head -n 1)
+  if [ -n "$line" ]; then cur=${line#*=}; else cur=$(getprop "$k"); fi
+  case "$cur" in
+    */*/*:*) ;;
+    *) echo "GAGAL $k (format fingerprint asli tidak dikenal)"; return 0 ;;
+  esac
+  new="$b/$n/$d:${cur#*:}"
+  if echo "$new" | grep -Eq '^[A-Za-z0-9._:/+ -]+$'; then
+    setp "$k" "$new"
+    if [ "$(getprop "$k")" = "$new" ]; then echo "$k=$new" >> "$D/fp.conf"; fi
+  else
+    echo "GAGAL $k (karakter tidak aman)"
+  fi
+}
+
 # Kembalikan satu properti ke nilai aslinya (kosong = hapus properti).
 restorep() {
   line=$(grep "^$1=" "$D/orig.conf" | head -n 1)
@@ -51,10 +72,12 @@ restorep() {
   echo "PULIH $1"
 }
 
+if [ "$MODE" = apply ]; then : > "$D/fp.conf"; fi
+
 #PROPS#
 
 if [ "$MODE" = apply ]; then
-  printf 'device=%s\nsoc=%s\ndeep=%s\n' "$DEVICE_ID" "$SOC_ID" "$DEEP" > "$D/active.conf"
+  printf 'device=%s\nsoc=%s\ndeep=%s\ngame=%s\nfp=%s\n' "$DEVICE_ID" "$SOC_ID" "$DEEP" "$GAME" "$FP" > "$D/active.conf"
   if [ "$PERSIST" = 1 ]; then
     mkdir -p "$M" || { echo "GAGAL: tidak bisa membuat module boot"; exit 5; }
     cat > "$M/module.prop" <<'SENZA_MODPROP'
@@ -68,6 +91,7 @@ SENZA_MODPROP
     cat > "$M/system.prop" <<'SENZA_VALUES'
 #VALUES#
 SENZA_VALUES
+    if [ -s "$D/fp.conf" ]; then cat "$D/fp.conf" >> "$M/system.prop"; fi
     cat > "$M/post-fs-data.sh" <<'SENZA_PFS'
 #!/system/bin/sh
 MODDIR=${0%/*}
@@ -93,7 +117,7 @@ SENZA_PFS
     rm -rf "$M"
   fi
 else
-  rm -f "$D/active.conf" "$D/orig.conf"
+  rm -f "$D/active.conf" "$D/orig.conf" "$D/fp.conf"
   rm -rf "$M"
   echo "OK dipulihkan"
 fi

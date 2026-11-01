@@ -105,4 +105,57 @@ class FakeDeviceEngineTest {
         assertEquals("MediaTek Dimensity 9600 Pro", FakeDeviceEngine.formatCpuInfo("MediaTek Helio G100", mt))
         assertEquals("Qualcomm Snapdragon 8 Elite", FakeDeviceEngine.formatCpuInfo("MediaTek Helio G100", qc))
     }
+
+    @Test fun packageValidationAcceptsRealPackagesAndRejectsInjection() {
+        assertTrue(FakeDeviceEngine.isValidPackage("com.mobile.legends"))
+        assertTrue(FakeDeviceEngine.isValidPackage("com.tencent.ig"))
+        listOf("", "legends", "com.x; rm -rf /", "com.x'y", "com.x y", "com..x", "1com.x", "com.x\nid").forEach {
+            assertTrue("harus ditolak: $it", !FakeDeviceEngine.isValidPackage(it))
+        }
+    }
+
+    @Test fun protectedPackagesCannotBeReset() {
+        assertTrue(FakeDeviceEngine.isProtectedPackage("com.android.systemui", "com.senzaproject.senzatools"))
+        assertTrue(FakeDeviceEngine.isProtectedPackage("com.topjohnwu.magisk", "com.senzaproject.senzatools"))
+        assertTrue(FakeDeviceEngine.isProtectedPackage("com.senzaproject.senzatools", "com.senzaproject.senzatools"))
+        assertTrue(!FakeDeviceEngine.isProtectedPackage("com.mobile.legends", "com.senzaproject.senzatools"))
+    }
+
+    @Test fun resetScriptNeverTouchesDownloadedResources() {
+        for (lvl in FakeDeviceEngine.ResetLevel.values()) {
+            val s = FakeDeviceEngine.resetScript("com.mobile.legends", lvl)
+            assertTrue(s.contains("am force-stop"))
+            assertTrue(s.contains("wipe \"\$D/cache\""))
+            // OBB dan Android/data/<paket>/files hanya boleh dihitung ukurannya, tidak pernah dihapus.
+            assertTrue(!s.contains("wipe \"\$O"))
+            assertTrue(!s.contains("wipe \"\$E/files"))
+            assertTrue(!s.contains("rm -rf \"\$D\"") && !s.contains("rm -rf \"\$E\""))
+        }
+        assertTrue(!FakeDeviceEngine.resetScript("a.b", FakeDeviceEngine.ResetLevel.CACHE).contains("shared_prefs"))
+        assertTrue(FakeDeviceEngine.resetScript("a.b", FakeDeviceEngine.ResetLevel.CONFIG).contains("shared_prefs"))
+    }
+
+    @Test fun gameModeOnlyForDevicesWithKnownCodename() {
+        val op = FakeDeviceEngine.device("op13")!!
+        val m = FakeDeviceEngine.propsFor(op, null, game = true)
+        assertEquals("OP5D55L1", m["ro.product.device"])
+        assertEquals("OP5D55L1", m["ro.product.vendor.device"])
+        assertEquals("CPH2655", m["ro.product.name"])
+        assertEquals(28 + 14, m.size)
+        assertTrue(m.keys.all { it in FakeDeviceEngine.ALL_KEYS })
+        // Tanpa codename: tidak ada yang dikarang.
+        val noCode = FakeDeviceEngine.DEVICES.first { it.codename == null }
+        assertEquals(28, FakeDeviceEngine.propsFor(noCode, null, game = true).size)
+        // Bawaan (game=false) tidak pernah menyentuh device/name.
+        assertTrue(FakeDeviceEngine.propsFor(op, null).keys.none { it.endsWith(".device") || it.endsWith(".name") })
+        // Mode game tidak pernah menyentuh platform/hardware.
+        assertTrue(m.keys.none { it in FakeDeviceEngine.DEEP_KEYS })
+        FakeDeviceEngine.DEVICES.mapNotNull { it.codename }.forEach { assertTrue(re.matches(it)) }
+    }
+
+    @Test fun fingerprintIsNeverPartOfStaticProps() {
+        assertTrue(FakeDeviceEngine.FP_KEYS.all { it in FakeDeviceEngine.ALL_KEYS })
+        val op = FakeDeviceEngine.device("op13")!!
+        assertTrue(FakeDeviceEngine.propsFor(op, null, game = true).keys.none { it in FakeDeviceEngine.FP_KEYS })
+    }
 }

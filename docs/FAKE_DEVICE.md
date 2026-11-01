@@ -10,7 +10,7 @@ Fitur di **Toolkit → Fake Device** untuk menyamarkan model perangkat dan SoC a
 ## Yang diubah
 `ro.product.{model,brand,manufacturer,marketname}` di semua partisi (utama, system, system_ext, vendor, odm, product, bootimage) dan `ro.soc.model` / `ro.soc.manufacturer`.
 
-Juga `ro.hardware.chipname` (nama chip). Sengaja **tidak** diubah: `ro.product.device/name` dan fingerprint.
+Juga `ro.hardware.chipname` (nama chip). Secara bawaan **tidak** diubah: `ro.product.device/name` dan fingerprint (lihat Mode game).
 
 ## Mode dalam (agar terbaca di DevCheck)
 Aplikasi seperti DevCheck mengenali chip dari `ro.board.platform` dan `ro.hardware`, bukan dari `ro.soc.model`. Bila **Mode dalam** aktif, properti ini ikut diubah: `ro.board.platform`, `ro.hardware`, `ro.product.board`, serta `ro.mediatek.platform` / `ro.vendor.mediatek.platform` untuk SoC MediaTek.
@@ -27,6 +27,20 @@ Di HP Transsion nama chip di Pengaturan dan DevCheck dibaca dari berkas sistem, 
 - **Android 16+**: berkas `cpu_info`, isinya nama chip ditulis langsung (mis. `Dimensity 9600 Pro`). Dicari di `/tr_product/etc/asset/transettings/cpu_info` dan `/system/tr_product/etc/asset/transettings/cpu_info`; bila keduanya satu berkas (symlink), hanya diubah sekali. Bila aslinya memakai awalan vendor (`MediaTek ...`), awalan itu dipertahankan.
 
 Berkas diganti lewat Editor File Root (bind-mount, tanpa Magisk, berkas asli tidak ditimpa, tetap aktif setelah restart). Salinan asli disimpan, **Pulihkan berkas** (atau Kembalikan ke asli) melepasnya. Restart setelah menerapkan atau memulihkan.
+
+## Mode game (opsional)
+Banyak game memilih profil grafis dari `Build.DEVICE` / `Build.PRODUCT` atau fingerprint, bukan `Build.MODEL`. **Mode game** mengubah `ro.product.device` dan `ro.product.name` di semua partisi. Hanya tersedia untuk device yang kode aslinya diketahui dan terverifikasi: OnePlus 13 (`OP5D55L1` / `CPH2655`) dan Pixel 10 Pro XL (`mustang`). Untuk device lain Mode game dilewati, tidak ada nilai yang dikarang. Tambahkan `codename` (dan `productName`) di `FakeDeviceEngine.DEVICES` bila sudah punya nilai aslinya.
+
+**Ubah fingerprint juga** (hanya aktif bila Mode game aktif) mengganti tiga bagian depan fingerprint asli HP-mu (`merek/nama/device`); versi Android, build id, dan tags tetap milik perangkatmu. Dihitung di perangkat dari nilai asli di `orig.conf`, jadi menerapkan ulang tidak menumpuk nilai palsu.
+
+Risiko, makanya default mati:
+- Fingerprint berubah = Android menganggap ada pembaruan sistem. Boot berikutnya dan boot setelah **Kembalikan ke asli** bisa beberapa menit karena aplikasi dioptimalkan ulang.
+- Play Integrity / aplikasi bank hampir pasti menolak.
+- Device/name dipakai sebagian skrip vendor. Bila boot bermasalah: safe mode Magisk, atau hapus `/data/adb/modules/senza_fakedevice`.
+- Berbeda dengan Mode dalam, Mode game ikut **Tetap setelah restart**, karena Build.DEVICE harus sudah terisi sebelum zygote mulai.
+
+## Reset konfigurasi game
+Game menyimpan penilaian perangkat di datanya sendiri, jadi fake device baru terbaca setelah itu dibuang. Kartu **Reset konfigurasi game** menutup paksa game lalu menghapus `cache`, `code_cache`, dan (opsional) `shared_prefs` serta folder `Saved/Config` (Unreal Engine). OBB dan `Android/data/<paket>/files` tidak disentuh. Urutan: Terapkan, Restart, Reset game, buka game. Lokasi penyimpanan penilaian berbeda per game; bila satu game tetap membaca perangkat lama, lokasinya perlu ditambahkan.
 
 ## Cara kerja
 1. Nilai asli disimpan di `/data/adb/senza_fakedevice/orig.conf` (sekali per properti).

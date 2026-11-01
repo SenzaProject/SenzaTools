@@ -15,8 +15,10 @@ import java.io.File
  *  3. Hasilnya dibaca ulang lewat getprop dan dibandingkan; yang gagal dilaporkan, bukan diasumsikan berhasil.
  *  4. Bila "tetap setelah reboot" aktif, dipasang module systemless (system.prop + post-fs-data.sh).
  *
- * Yang SENGAJA tidak diubah: ro.board.platform, ro.hardware*, ro.product.device/name, fingerprint. Properti itu dipakai
- * sistem untuk memuat driver GPU/HAL; mengubahnya bisa membuat grafis, kamera, atau boot rusak.
+ * Secara bawaan TIDAK diubah: ro.board.platform, ro.hardware*, ro.product.device/name, fingerprint. Properti itu dipakai
+ * sistem untuk memuat driver GPU/HAL dan memeriksa pembaruan; mengubahnya bisa merusak grafis, kamera, atau boot.
+ * Hanya untuk device yang kode aslinya diketahui, "Mode game" (opt-in) mengubah ro.product.device/name, dan "ubah fingerprint"
+ * (opt-in lagi) mengganti tiga bagian depan fingerprint asli.
  *
  * Aplikasi membaca Build.MODEL sekali saat prosesnya (dan zygote) dimulai, jadi perubahan baru terlihat penuh
  * setelah restart perangkat.
@@ -33,7 +35,11 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         val marketName: String,
         val brand: String,
         val manufacturer: String,
-        val model: String
+        val model: String,
+        /** Nilai ro.product.device asli perangkat ini; null = belum diketahui, Mode game dilewati untuk preset ini. */
+        val codename: String? = null,
+        /** Nilai ro.product.name asli; bila null dipakai [codename]. */
+        val productName: String? = null
     )
 
     /**
@@ -45,7 +51,7 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         val hardware: String? get() = platform?.let { if (vendor == Vendor.QUALCOMM) "qcom" else it }
     }
 
-    data class Status(val deviceId: String?, val socId: String?, val bootInstalled: Boolean, val resetprop: String?, val deep: Boolean = false)
+    data class Status(val deviceId: String?, val socId: String?, val bootInstalled: Boolean, val resetprop: String?, val deep: Boolean = false, val game: Boolean = false, val fingerprint: Boolean = false)
 
     data class Outcome(val ok: Boolean, val message: String, val failures: List<String>)
 
@@ -63,10 +69,10 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             Device("s26u", "Samsung Galaxy S26 Ultra", "samsung", "samsung", "SM-S948B"),
             Device("rog9p", "ASUS ROG Phone 9 Pro", "asus", "asus", "ASUS_AI2501"),
             Device("rm11p", "RedMagic 11 Pro", "nubia", "nubia", "NX809J"),
-            Device("op13", "OnePlus 13", "OnePlus", "OnePlus", "CPH2655"),
+            Device("op13", "OnePlus 13", "OnePlus", "OnePlus", "CPH2655", "OP5D55L1", "CPH2655"),
             Device("mi15u", "Xiaomi 15 Ultra", "Xiaomi", "Xiaomi", "25010PN30G"),
             Device("x500pm", "vivo X500 Pro Max", "vivo", "vivo", "V2610"),
-            Device("px10pxl", "Google Pixel 10 Pro XL", "google", "Google", "Pixel 10 Pro XL"),
+            Device("px10pxl", "Google Pixel 10 Pro XL", "google", "Google", "Pixel 10 Pro XL", "mustang", "mustang"),
             Device("fx8p", "OPPO Find X8 Pro", "OPPO", "OPPO", "CPH2659"),
             Device("mg7p", "HONOR Magic7 Pro", "HONOR", "HONOR", "PTP-AN10"),
             Device("gt7p", "realme GT 7 Pro", "realme", "realme", "RMX5010")
@@ -95,8 +101,21 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
          */
         val DEEP_KEYS = listOf("ro.board.platform", "ro.hardware", "ro.product.board", "ro.mediatek.platform", "ro.vendor.mediatek.platform")
 
+        /**
+         * Properti "Mode game": ro.product.device dan ro.product.name di semua partisi. Banyak game memilih profil grafis dari
+         * Build.DEVICE / Build.PRODUCT, bukan Build.MODEL. Tanpa Mode dalam ini tidak menyentuh platform/hardware (driver).
+         */
+        val GAME_KEYS: List<String> = PARTS.flatMap { p -> listOf("ro.product.${p}device", "ro.product.${p}name") }
+
+        /**
+         * Fingerprint (Build.FINGERPRINT). Nilainya TIDAK dibuat dari nol: skrip memakai fingerprint asli perangkat ini dan hanya
+         * mengganti tiga bagian depan (merek/nama/device), jadi versi Android, build id, dan tags tetap yang asli. Dihitung di
+         * perangkat, bukan di sini.
+         */
+        val FP_KEYS: List<String> = listOf("ro.build.fingerprint")
+
         /** Semua properti yang boleh disentuh fitur ini (urutan tetap). */
-        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS
+        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS + GAME_KEYS + FP_KEYS
 
         private val TRANSSION_BRANDS = setOf("infinix", "tecno", "itel", "transsion")
         private const val PRODUCT_BUILD_PROP = "/product/etc/build.prop"
@@ -151,11 +170,59 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         fun device(id: String?): Device? = DEVICES.firstOrNull { it.id == id }
         fun soc(id: String?): Soc? = SOCS.firstOrNull { it.id == id }
 
+        // ------------------------------------------------------------------ Reset konfigurasi game
+
+        /**
+         * Tingkat reset konfigurasi game. KEDUANYA tidak menyentuh OBB maupun berkas unduhan game di
+         * Android/data/<paket>/files, jadi game tidak perlu mengunduh ulang resource.
+         *  - CACHE: cache dan code_cache (internal + eksternal).
+         *  - CONFIG: CACHE + shared_prefs + folder Saved/Config (Unreal Engine). Di sinilah game biasanya menyimpan
+         *    profil perangkat / tingkat grafis yang dinilai sekali saat pertama dibuka.
+         */
+        enum class ResetLevel { CACHE, CONFIG }
+
+        private val PACKAGE_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
+        private val PROTECTED_PKG_PREFIXES = listOf(
+            "com.android.", "com.google.android.gms", "com.google.android.gsf",
+            "com.topjohnwu.", "me.weishu.", "me.bmax.", "moe.shizuku."
+        )
+
+        fun isValidPackage(pkg: String): Boolean = pkg.length <= 150 && PACKAGE_RE.matches(pkg)
+
+        fun isProtectedPackage(pkg: String, self: String): Boolean =
+            pkg == self || pkg == "android" || PROTECTED_PKG_PREFIXES.any { pkg.startsWith(it) }
+
+        /** Skrip root untuk reset konfigurasi satu game. Nama paket divalidasi ketat sebelum masuk ke skrip. */
+        fun resetScript(pkg: String, level: ResetLevel): String {
+            require(isValidPackage(pkg)) { "Nama paket tidak valid: $pkg" }
+            val l = mutableListOf(
+                "PKG='$pkg'",
+                "D=/data/data/\$PKG",
+                "E=/data/media/0/Android/data/\$PKG",
+                "O=/data/media/0/Android/obb/\$PKG",
+                "[ -d \"\$D\" ] || { echo 'GAGAL paket tidak terpasang'; exit 6; }",
+                "sz() { s=\$(du -sk \"\$1\" 2>/dev/null | cut -f1); echo \${s:-0}; }",
+                // Hapus ISI direktori (bukan direktorinya) supaya izin/SELinux direktori tetap utuh.
+                "wipe() { [ -d \"\$1\" ] || return 0; b=\$(sz \"\$1\"); find \"\$1\" -mindepth 1 -maxdepth 1 -exec rm -rf {} + ; echo \"OK \$1 \$b\"; }",
+                "am force-stop \"\$PKG\" >/dev/null 2>&1",
+                "wipe \"\$D/cache\"",
+                "wipe \"\$D/code_cache\"",
+                "wipe \"\$E/cache\""
+            )
+            if (level == ResetLevel.CONFIG) {
+                l += "wipe \"\$D/shared_prefs\""
+                l += "[ -d \"\$E/files\" ] && find \"\$E/files\" -maxdepth 8 -type d -name Config -path '*/Saved/*' 2>/dev/null | while IFS= read -r c; do wipe \"\$c\"; done"
+            }
+            l += "echo \"KEEP \$(sz \"\$E/files\") \$(sz \"\$O\")\""
+            l += "exit 0"
+            return l.joinToString("\n") + "\n"
+        }
+
         /** Bagian yang aman ditulis ke module boot (tanpa properti Mode dalam). */
         fun persistable(props: Map<String, String>): Map<String, String> = props.filterKeys { it !in DEEP_KEYS }
 
         /** Daftar properti yang akan ditulis untuk pilihan ini (kosong bila keduanya null). */
-        fun propsFor(device: Device?, soc: Soc?, deep: Boolean = false): Map<String, String> {
+        fun propsFor(device: Device?, soc: Soc?, deep: Boolean = false, game: Boolean = false): Map<String, String> {
             val m = linkedMapOf<String, String>()
             if (device != null) {
                 for (p in PARTS) {
@@ -163,6 +230,13 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
                     m["ro.product.${p}brand"] = device.brand
                     m["ro.product.${p}manufacturer"] = device.manufacturer
                     m["ro.product.${p}marketname"] = device.marketName
+                }
+                val code = device.codename
+                if (game && code != null) {
+                    for (p in PARTS) {
+                        m["ro.product.${p}device"] = code
+                        m["ro.product.${p}name"] = device.productName ?: code
+                    }
                 }
             }
             if (soc != null) {
@@ -188,15 +262,21 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         }
     }
 
-    private fun buildScript(mode: String, props: Map<String, String>, persist: Boolean, deviceId: String?, socId: String?, deep: Boolean = false): String {
+    private fun buildScript(mode: String, props: Map<String, String>, persist: Boolean, deviceId: String?, socId: String?, deep: Boolean = false, game: Boolean = false, fpDevice: Device? = null): String {
         require(mode == "apply" || mode == "restore" || mode == "status") { "Mode tidak valid: $mode" }
         require(SAFE_ID.matches(deviceId.orEmpty()) && SAFE_ID.matches(socId.orEmpty())) { "ID tidak valid" }
         val tpl = ctx.assets.open("senza_fakedevice.sh").bufferedReader().use { it.readText() }
         val sb = StringBuilder()
         if (mode != "status") {
+            val fpIds = fpDevice?.let { d ->
+                val ids = listOf(d.brand, d.productName ?: d.codename.orEmpty(), d.codename.orEmpty())
+                require(ids.all { SAFE_VALUE.matches(it) && !it.contains(' ') && !it.contains(':') && !it.contains('/') }) { "Nilai fingerprint tidak aman" }
+                ids
+            }
             for (k in ALL_KEYS) {
                 val v = props[k]
-                if (mode == "apply" && v != null) sb.append("setp '").append(k).append("' '").append(v).append("'\n")
+                if (mode == "apply" && k in FP_KEYS && fpIds != null) sb.append("fpset '").append(k).append("' '").append(fpIds[0]).append("' '").append(fpIds[1]).append("' '").append(fpIds[2]).append("'\n")
+                else if (mode == "apply" && v != null) sb.append("setp '").append(k).append("' '").append(v).append("'\n")
                 else sb.append("restorep '").append(k).append("'\n")
             }
         }
@@ -207,6 +287,8 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             .replace("#DEVICE_ID#", deviceId.orEmpty())
             .replace("#SOC_ID#", socId.orEmpty())
             .replace("#DEEP#", if (deep) "1" else "0")
+            .replace("#GAME#", if (game) "1" else "0")
+            .replace("#FP#", if (fpDevice != null) "1" else "0")
             .replace("#PROPS#", sb.toString().trimEnd())
             .replace("#VALUES#", values)
     }
@@ -229,6 +311,8 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         var boot = false
         var rp: String? = null
         var deep = false
+        var game = false
+        var fp = false
         r.output.lines().forEach { line ->
             val t = line.trim()
             when {
@@ -236,20 +320,30 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
                 t.startsWith("soc=") -> soc = t.removePrefix("soc=").ifBlank { null }
                 t == "boot=1" -> boot = true
                 t == "deep=1" -> deep = true
+                t == "game=1" -> game = true
+                t == "fp=1" -> fp = true
                 t.startsWith("rp=") -> rp = t.removePrefix("rp=").ifBlank { null }
             }
         }
-        return Status(dev, soc, boot, rp, deep)
+        return Status(dev, soc, boot, rp, deep, game, fp)
     }
 
     /** Terapkan pilihan (salah satu boleh null = tetap asli). Hasil diperiksa ulang oleh skrip. */
-    suspend fun apply(device: Device?, soc: Soc?, persist: Boolean, deep: Boolean = false): Outcome {
+    suspend fun apply(device: Device?, soc: Soc?, persist: Boolean, deep: Boolean = false, game: Boolean = false, fingerprint: Boolean = false): Outcome {
         if (device == null && soc == null) return Outcome(false, "Pilih device atau SoC dulu, atau gunakan Kembalikan ke asli.", emptyList())
-        val props = propsFor(device, soc, deep)
-        val script = buildScript("apply", props, persist, device?.id, soc?.id, deep && props.keys.any { it in DEEP_KEYS })
+        val gameOn = game && device?.codename != null
+        val fpOn = fingerprint && gameOn
+        val props = propsFor(device, soc, deep, gameOn)
+        val script = buildScript("apply", props, persist, device?.id, soc?.id, deep && props.keys.any { it in DEEP_KEYS }, gameOn, if (fpOn) device else null)
         val r = runScript(script, "terapkan fake device")
         val usedDeep = props.keys.any { it in DEEP_KEYS }
-        return parse(r.output, r.exitCode, props.size, persist, usedDeep, deep && soc != null && soc.platform == null)
+        val gameNote = when {
+            game && device == null -> " Mode game dilewati: pilih device dulu."
+            game && device?.codename == null -> " Mode game dilewati: kode perangkat ${device?.marketName} belum diketahui, jadi tidak ada yang dikarang."
+            fpOn -> " Fingerprint diubah: boot berikutnya (dan setelah dipulihkan) bisa lebih lama karena Android mengoptimalkan ulang aplikasi."
+            else -> ""
+        }
+        return parse(r.output, r.exitCode, props.size + (if (fpOn) 1 else 0), persist, usedDeep, deep && soc != null && soc.platform == null, gameNote)
     }
 
     /**
@@ -258,6 +352,31 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
      */
     suspend fun softRestart(): Boolean =
         access.runRootEdit("setprop ctl.restart zygote; setprop ctl.restart zygote_secondary", "soft restart (zygote)", 10_000).ok
+
+    /**
+     * Paksa-hentikan game lalu hapus cache/konfigurasi yang menyimpan penilaian perangkat lama, TANPA menghapus
+     * data unduhan (OBB dan Android/data/<paket>/files). Jalankan SETELAH fake device aktif dan perangkat direstart,
+     * lalu buka game: game menilai ulang perangkat dan membaca nilai palsu yang baru.
+     */
+    suspend fun resetGameConfig(pkg: String, level: ResetLevel): Outcome {
+        val p = pkg.trim()
+        if (!isValidPackage(p)) return Outcome(false, "Nama paket tidak valid. Contoh: com.mobile.legends", emptyList())
+        if (isProtectedPackage(p, ctx.packageName)) return Outcome(false, "Paket sistem dan root manager dilindungi, tidak boleh direset.", emptyList())
+        val r = runScript(resetScript(p, level), "reset konfigurasi game $p")
+        val lines = r.output.lines().map { it.trim() }
+        val fails = lines.filter { it.startsWith("GAGAL") }
+        if (!r.ok || fails.isNotEmpty()) {
+            return Outcome(false, "Gagal: ${fails.firstOrNull() ?: r.output.trim().take(160).ifBlank { "tidak ada keluaran" }}", fails)
+        }
+        val cleanedKb = lines.filter { it.startsWith("OK /") }.sumOf { it.substringAfterLast(' ').toLongOrNull() ?: 0L }
+        val keepKb = lines.firstOrNull { it.startsWith("KEEP ") }?.removePrefix("KEEP ")?.split(' ')?.sumOf { it.toLongOrNull() ?: 0L } ?: 0L
+        fun mb(kb: Long) = String.format(java.util.Locale.US, "%.1f MB", kb / 1024.0)
+        return Outcome(
+            true,
+            "Selesai: ${mb(cleanedKb)} dibersihkan, data unduhan game ${mb(keepKb)} dipertahankan. Buka game sekarang; mungkin perlu login ulang.",
+            emptyList()
+        )
+    }
 
     /** Kembalikan semua properti ke nilai asli dan hapus module boot. */
     suspend fun restore(): Outcome {
@@ -349,7 +468,7 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         else Outcome(false, "Gagal memulihkan: ${fails.joinToString()}", fails)
     }
 
-    private fun parse(output: String, exitCode: Int, total: Int, persist: Boolean, usedDeep: Boolean, deepUnavailable: Boolean): Outcome {
+    private fun parse(output: String, exitCode: Int, total: Int, persist: Boolean, usedDeep: Boolean, deepUnavailable: Boolean, extraNote: String = ""): Outcome {
         val lines = output.lines().map { it.trim() }
         val fails = lines.filter { it.startsWith("GAGAL") }
         val okCount = lines.count { it.startsWith("OK ro.") }
@@ -368,6 +487,6 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             usedDeep -> " Mode dalam (platform/hardware) hanya berlaku sampai restart dan perlu diterapkan ulang setelah boot."
             else -> ""
         }
-        return Outcome(fails.isEmpty(), msg + bootNote + deepNote + " Restart perangkat agar game membaca nilai baru.", fails)
+        return Outcome(fails.isEmpty(), msg + bootNote + deepNote + extraNote + " Restart perangkat agar game membaca nilai baru.", fails)
     }
 }
