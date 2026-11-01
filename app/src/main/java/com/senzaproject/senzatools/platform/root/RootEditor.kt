@@ -88,7 +88,7 @@ class RootEditor(private val ctx: Context, private val access: AccessManager, pr
             "prop", "xml", "rc", "conf", "cfg", "txt", "json", "ini", "sh", "properties", "list", "cil",
             "policy", "yaml", "yml", "mk", "csv", "vintf"
         )
-        private val EXACT_NAMES = setOf("build.prop", "default.prop", "local.prop", "prop.default")
+        private val EXACT_NAMES = setOf("build.prop", "default.prop", "local.prop", "prop.default", "cpu_info")
         private const val MODULE_DIR = "/data/adb/modules/senza_edit"
         private const val LEGACY_BIND_DIR = "senza_bind"
         private const val B64 = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING

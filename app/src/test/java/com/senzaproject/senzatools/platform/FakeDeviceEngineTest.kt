@@ -77,4 +77,32 @@ class FakeDeviceEngineTest {
         // tanpa Mode dalam, properti platform tidak disentuh
         assertTrue(FakeDeviceEngine.propsFor(null, sd, false).keys.none { it in FakeDeviceEngine.DEEP_KEYS })
     }
+
+    @Test fun mergePropsReplacesAllOccurrencesAndAppendsMissing() {
+        val src = "# komentar\nro.a=1\nro.soc.model=MT6789\nro.soc.model=MT6789\nro.z=9"
+        val out = FakeDeviceEngine.mergeProps(src, linkedMapOf("ro.soc.model" to "SM8750", "ro.chipname" to "SM8750"))
+        assertEquals("# komentar\nro.a=1\nro.soc.model=SM8750\nro.soc.model=SM8750\nro.z=9\nro.chipname=SM8750\n", out)
+        assertEquals("ro.x=1\n", FakeDeviceEngine.mergeProps("", mapOf("ro.x" to "1")))
+        assertEquals("a=1\r\nro.x=2\r\n", FakeDeviceEngine.mergeProps("a=1\r\n", mapOf("ro.x" to "2")))
+    }
+
+    @Test fun transsionPropsFollowDocumentedKeys() {
+        val sd = FakeDeviceEngine.SOCS.first { it.id == "d9500" }
+        val m = FakeDeviceEngine.transsionProps(sd)
+        assertEquals(
+            listOf("ro.hardware.chipname", "ro.chipname", "ro.soc.manufacturer", "ro.soc.model", "ro.vendor.soc.model.external_name", "ro.vendor.soc.model.part_name"),
+            m.keys.toList()
+        )
+        assertEquals("Mediatek", m["ro.soc.manufacturer"])
+        assertEquals("MT6993", m["ro.vendor.soc.model.part_name"])
+    }
+
+    @Test fun cpuInfoWritesChipNameKeepingOriginalStyle() {
+        val mt = FakeDeviceEngine.SOCS.first { it.id == "d9600p" }
+        val qc = FakeDeviceEngine.SOCS.first { it.id == "sd8e" }
+        assertEquals("Dimensity 9600 Pro", FakeDeviceEngine.formatCpuInfo("Helio G100", mt))
+        assertEquals("Dimensity 9600 Pro\n", FakeDeviceEngine.formatCpuInfo("Helio G100\n", mt))
+        assertEquals("MediaTek Dimensity 9600 Pro", FakeDeviceEngine.formatCpuInfo("MediaTek Helio G100", mt))
+        assertEquals("Qualcomm Snapdragon 8 Elite", FakeDeviceEngine.formatCpuInfo("MediaTek Helio G100", qc))
+    }
 }

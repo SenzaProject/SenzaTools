@@ -20,6 +20,14 @@ Aplikasi seperti DevCheck mengenali chip dari `ro.board.platform` dan `ro.hardwa
 - Hanya tersedia untuk SoC yang kode platformnya diketahui: Snapdragon 8 Elite (`sun`), 8 Elite Gen 5 (`canoe`), Dimensity 9600 Pro / 9500 / 9400+ / 9300+ (`mt6995` / `mt6993` / `mt6991` / `mt6989`).
 - **Soft restart** (restart zygote) membuat aplikasi membaca nilai baru tanpa reboot penuh, termasuk `Build.HARDWARE` yang di-cache zygote.
 
+## HP Transsion (Infinix / Tecno / itel)
+Di HP Transsion nama chip di Pengaturan dan DevCheck dibaca dari berkas sistem, jadi properti saja tidak cukup. Kartu **Transsion** muncul otomatis dan menulis SoC yang dipilih ke berkas yang sesuai versi Android:
+
+- **Android 14–15**: `/product/etc/build.prop` dengan kunci `ro.hardware.chipname`, `ro.chipname`, `ro.soc.manufacturer`, `ro.soc.model`, `ro.vendor.soc.model.external_name`, `ro.vendor.soc.model.part_name`.
+- **Android 16+**: berkas `cpu_info`, isinya nama chip ditulis langsung (mis. `Dimensity 9600 Pro`). Dicari di `/tr_product/etc/asset/transettings/cpu_info` dan `/system/tr_product/etc/asset/transettings/cpu_info`; bila keduanya satu berkas (symlink), hanya diubah sekali. Bila aslinya memakai awalan vendor (`MediaTek ...`), awalan itu dipertahankan.
+
+Berkas diganti lewat Editor File Root (bind-mount, tanpa Magisk, berkas asli tidak ditimpa, tetap aktif setelah restart). Salinan asli disimpan, **Pulihkan berkas** (atau Kembalikan ke asli) melepasnya. Restart setelah menerapkan atau memulihkan.
+
 ## Cara kerja
 1. Nilai asli disimpan di `/data/adb/senza_fakedevice/orig.conf` (sekali per properti).
 2. Properti ditimpa dengan `resetprop -n`, lalu dibaca ulang lewat `getprop`. Yang gagal dilaporkan.

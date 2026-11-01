@@ -1,6 +1,7 @@
 package com.senzaproject.senzatools.platform.root
 
 import android.content.Context
+import android.os.Build
 import com.senzaproject.senzatools.platform.AccessManager
 import java.io.File
 
@@ -20,7 +21,7 @@ import java.io.File
  * Aplikasi membaca Build.MODEL sekali saat prosesnya (dan zygote) dimulai, jadi perubahan baru terlihat penuh
  * setelah restart perangkat.
  */
-class FakeDeviceEngine(private val ctx: Context, private val access: AccessManager) {
+class FakeDeviceEngine(private val ctx: Context, private val access: AccessManager, private val editor: RootEditor) {
 
     enum class Vendor(val label: String, val manufacturer: String) {
         QUALCOMM("Snapdragon", "QTI"),
@@ -47,6 +48,14 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
     data class Status(val deviceId: String?, val socId: String?, val bootInstalled: Boolean, val resetprop: String?, val deep: Boolean = false)
 
     data class Outcome(val ok: Boolean, val message: String, val failures: List<String>)
+
+    enum class TranssionKind { BUILD_PROP, CPU_INFO }
+
+    /**
+     * Perangkat Transsion (Infinix/Tecno/itel). [targets] = berkas sistem yang ditemukan dan akan diubah
+     * (path asli setelah symlink diikuti, tanpa duplikat); [kind] tergantung versi Android.
+     */
+    data class TranssionInfo(val isTranssion: Boolean, val sdk: Int, val targets: List<String>, val kind: TranssionKind?)
 
     companion object {
         /** Perangkat kelas atas dari berbagai merek. Nilai model = Build.MODEL asli perangkat tersebut. */
@@ -88,6 +97,53 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
 
         /** Semua properti yang boleh disentuh fitur ini (urutan tetap). */
         val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS
+
+        private val TRANSSION_BRANDS = setOf("infinix", "tecno", "itel", "transsion")
+        private const val PRODUCT_BUILD_PROP = "/product/etc/build.prop"
+        private val CPU_INFO_PATHS = listOf(
+            "/tr_product/etc/asset/transettings/cpu_info",
+            "/system/tr_product/etc/asset/transettings/cpu_info"
+        )
+
+        /** Properti SoC di product/etc/build.prop (Transsion, Android 14-15). */
+        fun transsionProps(soc: Soc): Map<String, String> = linkedMapOf(
+            "ro.hardware.chipname" to soc.code,
+            "ro.chipname" to soc.code,
+            "ro.soc.manufacturer" to soc.vendor.manufacturer,
+            "ro.soc.model" to soc.code,
+            "ro.vendor.soc.model.external_name" to soc.code,
+            "ro.vendor.soc.model.part_name" to soc.code
+        ).also { m -> m.values.forEach { v -> require(SAFE_VALUE.matches(v)) { "Nilai tidak aman: $v" } } }
+
+        /**
+         * Ganti nilai properti yang sudah ada (semua kemunculannya) dan tambahkan yang belum ada di akhir.
+         * Baris lain, komentar, dan urutan dibiarkan. Hasil selalu diakhiri baris baru.
+         */
+        fun mergeProps(text: String, props: Map<String, String>): String {
+            val nl = if (text.contains("\r\n")) "\r\n" else "\n"
+            val lines = if (text.isEmpty()) mutableListOf<String>() else text.split("\n").map { it.removeSuffix("\r") }.toMutableList()
+            if (text.endsWith("\n") && lines.isNotEmpty()) lines.removeAt(lines.lastIndex)
+            val seen = mutableSetOf<String>()
+            val out = lines.map { line ->
+                val t = line.trim()
+                if (t.startsWith("#") || !t.contains('=')) line
+                else {
+                    val k = t.substringBefore('=').trim()
+                    val v = props[k]
+                    if (v != null) { seen += k; "$k=$v" } else line
+                }
+            }.toMutableList()
+            props.forEach { (k, v) -> if (k !in seen) out += "$k=$v" }
+            return out.joinToString(nl) + nl
+        }
+
+        /** Isi cpu_info (Transsion, Android 16+): nama chip ditulis langsung; awalan vendor dipertahankan bila aslinya memakainya. */
+        fun formatCpuInfo(original: String, soc: Soc): String {
+            val t = original.trim()
+            val hadPrefix = t.startsWith("MediaTek", ignoreCase = true) || t.startsWith("Qualcomm", ignoreCase = true)
+            val prefix = if (!hadPrefix) "" else if (soc.vendor == Vendor.MEDIATEK) "MediaTek " else "Qualcomm "
+            return prefix + soc.name + if (original.endsWith("\n")) "\n" else ""
+        }
 
         private val SAFE_VALUE = Regex("^[A-Za-z0-9 ._+-]{1,48}$")
         private val SAFE_ID = Regex("^[A-Za-z0-9_-]{0,24}$")
@@ -209,6 +265,88 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         val fails = r.output.lines().map { it.trim() }.filter { it.startsWith("GAGAL") }
         return if (r.ok && fails.isEmpty()) Outcome(true, "Dikembalikan ke nilai asli. Restart perangkat agar semua aplikasi memakai nilai asli.", emptyList())
         else Outcome(false, "Gagal memulihkan: ${r.output.trim().take(160)}", fails)
+    }
+
+    // ------------------------------------------------------------------ Transsion
+
+    private val prefs = ctx.getSharedPreferences("senza_fakedevice", Context.MODE_PRIVATE)
+
+    /** Deteksi HP Transsion dan berkas yang harus diubah (Android 14-15: product build.prop; 16+: cpu_info). */
+    suspend fun transsionInfo(): TranssionInfo {
+        val sdk = Build.VERSION.SDK_INT
+        val kind = when {
+            sdk >= 36 -> TranssionKind.CPU_INFO
+            sdk >= 34 -> TranssionKind.BUILD_PROP
+            else -> null
+        }
+        val brandHit = setOf(Build.MANUFACTURER, Build.BRAND).any { it.lowercase() in TRANSSION_BRANDS }
+        val cands = when (kind) {
+            TranssionKind.CPU_INFO -> CPU_INFO_PATHS
+            TranssionKind.BUILD_PROP -> listOf(PRODUCT_BUILD_PROP)
+            null -> emptyList()
+        }
+        if (!access.isRootVerified) return TranssionInfo(brandHit || prefs.getBoolean("transsion", false), sdk, emptyList(), kind)
+        val cmd = "for d in /tr_product /system/tr_product; do [ -d \"\$d\" ] && echo \"D:\$d\"; done; " +
+            "for f in " + cands.joinToString(" ") { "'$it'" } + "; do [ -f \"\$f\" ] && echo \"F:\$(readlink -f \"\$f\")\"; done; true"
+        val r = access.runRootEdit(cmd, "cek berkas Transsion")
+        val lines = r.output.lines().map { it.trim() }
+        val dirHit = lines.any { it.startsWith("D:") }
+        val targets = lines.filter { it.startsWith("F:/") }.map { it.removePrefix("F:") }.distinct()
+        val isT = brandHit || dirHit
+        if (isT) prefs.edit().putBoolean("transsion", true).apply()
+        return TranssionInfo(isT, sdk, targets, kind)
+    }
+
+    /** True bila salah satu berkas Transsion sedang diganti (bind-mount/overlay) oleh Senza Tools. */
+    suspend fun transsionActive(info: TranssionInfo): Boolean =
+        info.targets.isNotEmpty() && editor.overlays().any { it in info.targets }
+
+    /** Tulis SoC ke berkas Transsion lewat Editor File Root (bind-mount, tetap aktif setelah restart, tanpa Magisk). */
+    suspend fun applyTranssion(soc: Soc): Outcome {
+        val info = transsionInfo()
+        val kind = info.kind ?: return Outcome(false, "Android ${info.sdk} belum didukung untuk berkas Transsion (butuh Android 14 atau lebih baru).", emptyList())
+        if (info.targets.isEmpty()) return Outcome(false, "Berkas Transsion tidak ditemukan di HP ini.", emptyList())
+        if (editor.pending.value.isNotEmpty()) {
+            return Outcome(false, "Ada perubahan tertunda di Editor File Root. Terapkan atau buang dulu supaya tidak ikut terpasang.", emptyList())
+        }
+        val props = transsionProps(soc)
+        var staged = 0
+        for (path in info.targets) {
+            val cur = editor.read(path, true).getOrElse { return Outcome(false, "Tidak bisa membaca $path: ${it.message}", emptyList()) }
+            val next = when (kind) {
+                TranssionKind.BUILD_PROP -> mergeProps(cur, props)
+                TranssionKind.CPU_INFO -> formatCpuInfo(cur, soc)
+            }
+            if (next != cur) { editor.stage(path, next); staged++ }
+        }
+        if (staged == 0) return Outcome(true, "Berkas Transsion sudah berisi ${soc.name}.", emptyList())
+
+        val first = editor.apply(RootEditor.ApplyMode.BIND, reboot = false)
+        var applied = first.applied
+        var methods = first.methods
+        var failed = first.failed
+        if (failed.isNotEmpty()) {
+            val second = editor.apply(RootEditor.ApplyMode.OVERLAY, reboot = false)
+            applied = applied + second.applied
+            methods = methods + second.methods
+            failed = second.failed
+        }
+        failed.forEach { editor.discard(it.first) }
+        val how = methods.values.distinct().joinToString(", ").ifBlank { "-" }
+        return if (failed.isEmpty()) {
+            Outcome(true, "SoC ${soc.name} ditulis ke ${applied.size} berkas ($how). Restart agar Pengaturan dan DevCheck membaca nilai baru.", emptyList())
+        } else {
+            Outcome(false, "Gagal menulis ${failed.size} berkas: ${failed.first().second.take(140)}", failed.map { it.first })
+        }
+    }
+
+    /** Lepas penggantian berkas Transsion sehingga berkas asli terbaca lagi. */
+    suspend fun restoreTranssion(): Outcome {
+        val info = transsionInfo()
+        if (info.targets.isEmpty()) return Outcome(true, "Tidak ada berkas Transsion untuk dipulihkan.", emptyList())
+        val fails = info.targets.filterNot { editor.removeOverlay(it) }
+        return if (fails.isEmpty()) Outcome(true, "Berkas Transsion dikembalikan ke asli. Restart agar semua aplikasi membaca nilai asli.", emptyList())
+        else Outcome(false, "Gagal memulihkan: ${fails.joinToString()}", fails)
     }
 
     private fun parse(output: String, exitCode: Int, total: Int, persist: Boolean, usedDeep: Boolean, deepUnavailable: Boolean): Outcome {

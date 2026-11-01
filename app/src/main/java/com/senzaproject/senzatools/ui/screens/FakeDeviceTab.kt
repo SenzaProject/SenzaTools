@@ -52,11 +52,17 @@ fun FakeDeviceTab(s: ServiceLocator) {
     var confirmSoft by remember { mutableStateOf(false) }
     var needReboot by remember { mutableStateOf(false) }
     var tick by remember { mutableStateOf(0) }
+    var tInfo by remember { mutableStateOf<FakeDeviceEngine.TranssionInfo?>(null) }
+    var tActive by remember { mutableStateOf(false) }
+    var tMsg by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(rootOk, tick) {
         if (rootOk) {
             val cur = eng.status()
             status = cur
+            val ti = eng.transsionInfo()
+            tInfo = ti
+            tActive = eng.transsionActive(ti)
             if (tick == 0) {
                 if (deviceId == null) deviceId = cur.deviceId
                 if (socId == null) socId = cur.socId
@@ -108,6 +114,48 @@ fun FakeDeviceTab(s: ServiceLocator) {
         Caption("MediaTek")
         FakeDeviceEngine.SOCS.filter { it.vendor == FakeDeviceEngine.Vendor.MEDIATEK }.forEach { c ->
             ChoiceRow(c.name, "${c.code} · ${c.note}", socId == c.id) { socId = c.id }
+        }
+    }
+
+    val ti = tInfo
+    if (rootOk && ti != null && ti.isTranssion) {
+        GlassCard {
+            Heading("Transsion (Infinix / Tecno / itel)")
+            Body("Di HP Transsion nama chip di Pengaturan dan DevCheck dibaca dari berkas sistem. Android 14–15: product/etc/build.prop. Android 16+: cpu_info di tr_product. Tombol di bawah menulis SoC yang dipilih ke berkas itu.", dim = true)
+            KeyValue("Android (API)", ti.sdk.toString())
+            KeyValue("Berkas", if (ti.targets.isEmpty()) "tidak ditemukan" else ti.targets.joinToString("\n"))
+            when {
+                ti.kind == null -> StatusPill("Android ini belum didukung", g.bad)
+                tActive -> StatusPill("Berkas Transsion sedang diganti", g.warn)
+                else -> StatusPill("Berkas asli", g.good)
+            }
+            Caption("Memakai bind-mount lewat Editor File Root: tanpa Magisk, berkas asli tidak ditimpa, dan tetap aktif setelah restart. Restart setelah menerapkan.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton("Terapkan ke berkas Transsion", {
+                    scope.launch {
+                        busy = true; tMsg = null
+                        val soc = FakeDeviceEngine.soc(socId)
+                        tMsg = if (soc == null) "Pilih SoC dulu." else {
+                            val r = eng.applyTranssion(soc)
+                            if (r.ok) needReboot = true
+                            r.message
+                        }
+                        tick++
+                        busy = false
+                    }
+                }, Modifier.weight(1f), primary = true, enabled = !busy && socId != null && ti.kind != null && ti.targets.isNotEmpty())
+                GlassButton("Pulihkan berkas", {
+                    scope.launch {
+                        busy = true
+                        val r = eng.restoreTranssion()
+                        tMsg = r.message
+                        if (r.ok) needReboot = true
+                        tick++
+                        busy = false
+                    }
+                }, Modifier.weight(1f), enabled = !busy && tActive)
+            }
+            tMsg?.let { Body(it) }
         }
     }
 
@@ -175,6 +223,11 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 scope.launch {
                     busy = true; failures = emptyList()
                     val r = eng.restore()
+                    val t = tInfo
+                    if (t != null && tActive) {
+                        val tr = eng.restoreTranssion()
+                        tMsg = tr.message
+                    }
                     msg = r.message
                     failures = r.failures
                     if (r.ok) { deviceId = null; socId = null; needReboot = true }
