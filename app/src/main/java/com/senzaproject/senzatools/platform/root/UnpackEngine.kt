@@ -76,6 +76,8 @@ class UnpackEngine(
         sb.append("export TMPDIR=${q(tmpDir.path)}; mkdir -p \"\$TMPDIR\"\n")
         sb.append("export START_DIR=${q(ctx.filesDir.path)}\n")
         sb.append("export DNA_DIR=${q(BASE_DIR)}; mkdir -p \"\$DNA_DIR\"\n")
+        // Folder dibuat oleh root; buka aksesnya agar file manager/Termux bisa melihat dan mengisi.
+        sb.append("chmod 777 \"\$(dirname \"\$DNA_DIR\")\" \"\$DNA_DIR\" 2>/dev/null\n")
         sb.append("export DNA_TMP=${q(WORK_DIR)}; mkdir -p \"\$DNA_TMP\"\n")
         if (project != null) {
             sb.append("export DNA_PRO=\"\$DNA_DIR/$project\"; mkdir -p \"\$DNA_PRO\"\n")
@@ -149,6 +151,7 @@ class UnpackEngine(
         fi
         echo "> Membuat: $PROJECT_PREFIX${'$'}T"
         mkdir -p "${'$'}DNA_DIR/$PROJECT_PREFIX${'$'}T"
+        chmod 777 "${'$'}DNA_DIR/$PROJECT_PREFIX${'$'}T"
         echo "> Selesai: $PROJECT_PREFIX${'$'}T"
     """.trimIndent()
 
