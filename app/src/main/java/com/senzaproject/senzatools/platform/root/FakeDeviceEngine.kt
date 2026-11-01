@@ -58,6 +58,16 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
     enum class TranssionKind { BUILD_PROP, CPU_INFO }
 
     /**
+     * Tingkat reset konfigurasi game. KEDUANYA tidak menyentuh OBB maupun berkas unduhan game di
+     * Android/data/<paket>/files, jadi game tidak perlu mengunduh ulang resource.
+     *  - CACHE: cache dan code_cache (internal + eksternal).
+     *  - CONFIG: CACHE + shared_prefs + folder Saved/Config (Unreal Engine). Di sinilah game biasanya menyimpan
+     *    profil perangkat / tingkat grafis yang dinilai sekali saat pertama dibuka.
+     */
+    enum class ResetLevel { CACHE, CONFIG }
+
+
+    /**
      * Perangkat Transsion (Infinix/Tecno/itel). [targets] = berkas sistem yang ditemukan dan akan diubah
      * (path asli setelah symlink diikuti, tanpa duplikat); [kind] tergantung versi Android.
      */
@@ -171,15 +181,6 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         fun soc(id: String?): Soc? = SOCS.firstOrNull { it.id == id }
 
         // ------------------------------------------------------------------ Reset konfigurasi game
-
-        /**
-         * Tingkat reset konfigurasi game. KEDUANYA tidak menyentuh OBB maupun berkas unduhan game di
-         * Android/data/<paket>/files, jadi game tidak perlu mengunduh ulang resource.
-         *  - CACHE: cache dan code_cache (internal + eksternal).
-         *  - CONFIG: CACHE + shared_prefs + folder Saved/Config (Unreal Engine). Di sinilah game biasanya menyimpan
-         *    profil perangkat / tingkat grafis yang dinilai sekali saat pertama dibuka.
-         */
-        enum class ResetLevel { CACHE, CONFIG }
 
         private val PACKAGE_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
         private val PROTECTED_PKG_PREFIXES = listOf(
