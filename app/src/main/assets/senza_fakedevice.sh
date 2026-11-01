@@ -6,6 +6,7 @@ MODE=#MODE#
 PERSIST=#PERSIST#
 DEVICE_ID='#DEVICE_ID#'
 SOC_ID='#SOC_ID#'
+DEEP=#DEEP#
 
 RP=""
 for c in /data/adb/magisk/resetprop /data/adb/ksu/bin/resetprop /data/adb/ap/bin/resetprop /system/bin/resetprop resetprop; do
@@ -53,7 +54,7 @@ restorep() {
 #PROPS#
 
 if [ "$MODE" = apply ]; then
-  printf 'device=%s\nsoc=%s\n' "$DEVICE_ID" "$SOC_ID" > "$D/active.conf"
+  printf 'device=%s\nsoc=%s\ndeep=%s\n' "$DEVICE_ID" "$SOC_ID" "$DEEP" > "$D/active.conf"
   if [ "$PERSIST" = 1 ]; then
     mkdir -p "$M" || { echo "GAGAL: tidak bisa membuat module boot"; exit 5; }
     cat > "$M/module.prop" <<'SENZA_MODPROP'

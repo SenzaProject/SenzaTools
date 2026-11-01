@@ -42,12 +42,14 @@ fun FakeDeviceTab(s: ServiceLocator) {
     var deviceId by rememberSaveable { mutableStateOf<String?>(null) }
     var socId by rememberSaveable { mutableStateOf<String?>(null) }
     var persist by rememberSaveable { mutableStateOf(true) }
+    var deep by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var failures by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf<FakeDeviceEngine.Status?>(null) }
     var confirmRestore by remember { mutableStateOf(false) }
     var confirmReboot by remember { mutableStateOf(false) }
+    var confirmSoft by remember { mutableStateOf(false) }
     var needReboot by remember { mutableStateOf(false) }
     var tick by remember { mutableStateOf(0) }
 
@@ -58,6 +60,7 @@ fun FakeDeviceTab(s: ServiceLocator) {
             if (tick == 0) {
                 if (deviceId == null) deviceId = cur.deviceId
                 if (socId == null) socId = cur.socId
+                deep = cur.deep
             }
         }
     }
@@ -77,7 +80,7 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 st0 == null -> Caption("Memeriksa status…")
                 st0.resetprop == null -> StatusPill("resetprop tidak ditemukan", g.bad)
                 activeDevice != null || activeSoc != null -> StatusPill(
-                    "Aktif: " + listOfNotNull(activeDevice?.marketName, activeSoc?.name).joinToString(" + "),
+                    "Aktif: " + listOfNotNull(activeDevice?.marketName, activeSoc?.name).joinToString(" + ") + if (st0.deep) " (Mode dalam)" else "",
                     g.warn
                 )
                 else -> StatusPill("Tidak ada penyamaran aktif", g.good)
@@ -117,11 +120,22 @@ fun FakeDeviceTab(s: ServiceLocator) {
             }
             Switch(persist, { persist = it })
         }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Body("Mode dalam (agar terbaca di DevCheck)")
+                Caption("Juga mengubah ro.board.platform dan ro.hardware agar chip terbaca di DevCheck dan aplikasi sejenis. Hanya sampai restart, terapkan lagi setelah boot. Ada risiko kecil driver/kamera gagal dimuat; restart memulihkan.")
+            }
+            Switch(deep, { deep = it })
+        }
+        val selSoc = FakeDeviceEngine.soc(socId)
+        if (deep && selSoc != null && selSoc.platform == null) {
+            Caption("Kode platform ${selSoc.name} belum diketahui, Mode dalam dilewati. Untuk DevCheck pilih Snapdragon 8 Elite / 8 Elite Gen 5 atau Dimensity 9600 Pro / 9500 / 9400+ / 9300+.", color = g.warn)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassButton("Terapkan", {
                 scope.launch {
                     busy = true; msg = null; failures = emptyList()
-                    val r = eng.apply(FakeDeviceEngine.device(deviceId), FakeDeviceEngine.soc(socId), persist)
+                    val r = eng.apply(FakeDeviceEngine.device(deviceId), FakeDeviceEngine.soc(socId), persist, deep)
                     msg = r.message
                     failures = r.failures
                     if (r.ok) needReboot = true
@@ -134,15 +148,19 @@ fun FakeDeviceTab(s: ServiceLocator) {
         msg?.let { Body(it) }
         failures.take(6).forEach { Caption(it, color = g.bad) }
         if (needReboot && !busy) {
-            GlassButton("Restart sekarang", { confirmReboot = true }, Modifier.fillMaxWidth(), primary = true, danger = true, enabled = rootOk)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton("Soft restart", { confirmSoft = true }, Modifier.weight(1f), primary = true, enabled = rootOk)
+                GlassButton("Restart penuh", { confirmReboot = true }, Modifier.weight(1f), danger = true, enabled = rootOk)
+            }
         }
     }
 
     ExpandableCard("Catatan penting", false) {
         Body("• Game membaca model saat perangkat menyala, jadi perubahan baru terlihat penuh setelah restart. Setelah restart, buka game dan cek pengaturan grafis.", dim = true)
         Body("• Yang berubah hanya nama yang dilaporkan sistem. Performa CPU/GPU asli tetap. Grafis maksimal di HP lemah bisa lag, panas, atau FC.", dim = true)
-        Body("• Properti pemuat driver (ro.board.platform, ro.hardware) sengaja tidak diubah karena bisa merusak grafis dan boot.", dim = true)
-        Body("• Game yang membaca GPU asli (GL_RENDERER) atau /proc/cpuinfo tetap melihat perangkat aslinya.", dim = true)
+        Body("• Tanpa Mode dalam, ro.board.platform dan ro.hardware tidak disentuh (dipakai sistem memuat driver). Dengan Mode dalam, keduanya diubah hanya sampai restart dan tidak pernah dipakai saat boot.", dim = true)
+        Body("• DevCheck membaca nama chip dari platform/hardware, tetapi detail inti CPU (mis. 6× Cortex-A55 + 2× Cortex-A76), GPU (Mali), dan /proc/cpuinfo dibaca dari kernel dan tidak bisa dipalsukan lewat properti.", dim = true)
+        Body("• DevCheck memakai database chip sendiri; chip yang sangat baru bisa tampil Unknown. Hasil terbaik: Snapdragon 8 Elite / 8 Elite Gen 5 atau Dimensity 9600 Pro / 9500 / 9400+ / 9300+. Tutup paksa DevCheck sebelum membuka lagi.", dim = true)
         Body("• Aplikasi bank dan pengecekan integritas (Play Integrity) bisa menolak perangkat yang modelnya diubah. Kembalikan ke asli bila perlu.", dim = true)
         Body("• Aturan akun game berbeda-beda; memakai penyamaran perangkat tanggung jawab sendiri.", dim = true)
     }
@@ -165,6 +183,24 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 }
             },
             onDismiss = { confirmRestore = false }
+        )
+    }
+
+    if (confirmSoft) {
+        ConfirmDialog(
+            title = "Soft restart?",
+            message = "Sistem dimulai ulang tanpa reboot penuh (zygote). Layar kembali ke lock screen dan semua aplikasi tertutup. Simpan pekerjaan dulu.",
+            confirmText = "Soft restart",
+            danger = true,
+            onConfirm = {
+                confirmSoft = false
+                scope.launch {
+                    busy = true
+                    if (!eng.softRestart()) msg = "Soft restart gagal. Gunakan Restart penuh."
+                    busy = false
+                }
+            },
+            onDismiss = { confirmSoft = false }
         )
     }
 

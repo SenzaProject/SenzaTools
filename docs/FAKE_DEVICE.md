@@ -10,7 +10,15 @@ Fitur di **Toolkit → Fake Device** untuk menyamarkan model perangkat dan SoC a
 ## Yang diubah
 `ro.product.{model,brand,manufacturer,marketname}` di semua partisi (utama, system, system_ext, vendor, odm, product, bootimage) dan `ro.soc.model` / `ro.soc.manufacturer`.
 
-Sengaja **tidak** diubah: `ro.board.platform`, `ro.hardware*`, `ro.product.device/name`, fingerprint. Properti itu dipakai sistem untuk memuat driver GPU/HAL; mengubahnya bisa merusak grafis atau boot.
+Juga `ro.hardware.chipname` (nama chip). Sengaja **tidak** diubah: `ro.product.device/name` dan fingerprint.
+
+## Mode dalam (agar terbaca di DevCheck)
+Aplikasi seperti DevCheck mengenali chip dari `ro.board.platform` dan `ro.hardware`, bukan dari `ro.soc.model`. Bila **Mode dalam** aktif, properti ini ikut diubah: `ro.board.platform`, `ro.hardware`, `ro.product.board`, serta `ro.mediatek.platform` / `ro.vendor.mediatek.platform` untuk SoC MediaTek.
+
+- Hanya berlaku sampai restart. Tidak ditulis ke module boot, jadi boot tidak pernah memakai nilai palsu; terapkan lagi setelah boot.
+- Dipakai sistem untuk memuat driver GPU/HAL, jadi ada risiko kecil driver atau kamera gagal dimuat di proses yang baru dimulai. Restart memulihkan.
+- Hanya tersedia untuk SoC yang kode platformnya diketahui: Snapdragon 8 Elite (`sun`), 8 Elite Gen 5 (`canoe`), Dimensity 9600 Pro / 9500 / 9400+ / 9300+ (`mt6995` / `mt6993` / `mt6991` / `mt6989`).
+- **Soft restart** (restart zygote) membuat aplikasi membaca nilai baru tanpa reboot penuh, termasuk `Build.HARDWARE` yang di-cache zygote.
 
 ## Cara kerja
 1. Nilai asli disimpan di `/data/adb/senza_fakedevice/orig.conf` (sekali per properti).
@@ -22,5 +30,7 @@ Restart perangkat setelah menerapkan: aplikasi membaca `Build.MODEL` saat proses
 
 ## Batas
 - Hanya nama yang berubah; performa CPU/GPU asli tetap.
+- Detail inti CPU (jenis dan jumlah core), GPU, dan `/proc/cpuinfo` dibaca dari kernel dan tidak bisa dipalsukan lewat properti.
+- DevCheck memakai database chipnya sendiri; chip yang sangat baru bisa tampil Unknown.
 - Game yang membaca GL_RENDERER atau `/proc/cpuinfo` tetap melihat perangkat asli.
 - Aplikasi bank / Play Integrity bisa menolak perangkat yang modelnya diubah.

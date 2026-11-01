@@ -46,7 +46,8 @@ class FakeDeviceEngineTest {
         assertEquals("QTI", q["ro.soc.manufacturer"])
         val mt = FakeDeviceEngine.propsFor(null, FakeDeviceEngine.SOCS.first { it.vendor == FakeDeviceEngine.Vendor.MEDIATEK })
         assertEquals("Mediatek", mt["ro.soc.manufacturer"])
-        assertEquals(2, mt.size)
+        assertEquals(3, mt.size)
+        assertEquals(mt["ro.soc.model"], mt["ro.hardware.chipname"])
         assertTrue(FakeDeviceEngine.propsFor(null, null).isEmpty())
     }
 
@@ -54,8 +55,26 @@ class FakeDeviceEngineTest {
         val f = File("src/main/assets/senza_fakedevice.sh")
         assumeTrue(f.exists())
         val t = f.readText()
-        listOf("#MODE#", "#PERSIST#", "#DEVICE_ID#", "#SOC_ID#", "#PROPS#", "#VALUES#").forEach {
+        listOf("#MODE#", "#PERSIST#", "#DEVICE_ID#", "#SOC_ID#", "#DEEP#", "#PROPS#", "#VALUES#").forEach {
             assertEquals("placeholder $it harus tepat satu", 1, t.split(it).size - 1)
         }
+    }
+
+    @Test fun deepModeAddsPlatformPropsButNeverPersistsThem() {
+        val sd = FakeDeviceEngine.SOCS.first { it.id == "sd8e" }
+        val deep = FakeDeviceEngine.propsFor(null, sd, true)
+        assertEquals("sun", deep["ro.board.platform"])
+        assertEquals("qcom", deep["ro.hardware"])
+        val safe = FakeDeviceEngine.persistable(deep)
+        assertTrue(safe.keys.none { it in FakeDeviceEngine.DEEP_KEYS })
+        assertEquals("SM8750", safe["ro.soc.model"])
+        val mt = FakeDeviceEngine.propsFor(null, FakeDeviceEngine.SOCS.first { it.id == "d9500" }, true)
+        assertEquals("mt6993", mt["ro.board.platform"])
+        assertEquals("MT6993", mt["ro.mediatek.platform"])
+        // SoC tanpa kode platform tidak pernah menyentuh properti platform
+        val unknown = FakeDeviceEngine.propsFor(null, FakeDeviceEngine.SOCS.first { it.id == "sd8e6" }, true)
+        assertTrue(unknown.keys.none { it in FakeDeviceEngine.DEEP_KEYS })
+        // tanpa Mode dalam, properti platform tidak disentuh
+        assertTrue(FakeDeviceEngine.propsFor(null, sd, false).keys.none { it in FakeDeviceEngine.DEEP_KEYS })
     }
 }

@@ -35,9 +35,16 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         val model: String
     )
 
-    data class Soc(val id: String, val name: String, val vendor: Vendor, val code: String, val note: String)
+    /**
+     * [platform] = nilai ro.board.platform chip aslinya (kode internal, mis. "sun" untuk SM8750); null bila belum diketahui,
+     * lalu Mode dalam tidak bisa dipakai untuk SoC itu.
+     */
+    data class Soc(val id: String, val name: String, val vendor: Vendor, val code: String, val note: String, val platform: String? = null) {
+        /** Nilai ro.hardware yang lazim: "qcom" untuk Snapdragon, sama dengan platform untuk MediaTek. */
+        val hardware: String? get() = platform?.let { if (vendor == Vendor.QUALCOMM) "qcom" else it }
+    }
 
-    data class Status(val deviceId: String?, val socId: String?, val bootInstalled: Boolean, val resetprop: String?)
+    data class Status(val deviceId: String?, val socId: String?, val bootInstalled: Boolean, val resetprop: String?, val deep: Boolean = false)
 
     data class Outcome(val ok: Boolean, val message: String, val failures: List<String>)
 
@@ -60,20 +67,27 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         val SOCS = listOf(
             Soc("sd8ee6", "Snapdragon 8 Elite Extreme Gen 6", Vendor.QUALCOMM, "SM8975", "2nm, rilis September 2026"),
             Soc("sd8e6", "Snapdragon 8 Elite Gen 6", Vendor.QUALCOMM, "SM8950", "2nm, rilis September 2026"),
-            Soc("sd8e5", "Snapdragon 8 Elite Gen 5", Vendor.QUALCOMM, "SM8850", "3nm, rilis September 2025"),
-            Soc("sd8e", "Snapdragon 8 Elite", Vendor.QUALCOMM, "SM8750", "3nm, rilis Oktober 2024"),
-            Soc("d9600p", "Dimensity 9600 Pro", Vendor.MEDIATEK, "MT6995", "2nm, rilis September 2026"),
-            Soc("d9500", "Dimensity 9500", Vendor.MEDIATEK, "MT6993", "3nm, rilis September 2025"),
-            Soc("d9400p", "Dimensity 9400+", Vendor.MEDIATEK, "MT6991", "3nm, rilis 2025"),
-            Soc("d9300p", "Dimensity 9300+", Vendor.MEDIATEK, "MT6989", "4nm, rilis 2024")
+            Soc("sd8e5", "Snapdragon 8 Elite Gen 5", Vendor.QUALCOMM, "SM8850", "3nm, rilis September 2025", "canoe"),
+            Soc("sd8e", "Snapdragon 8 Elite", Vendor.QUALCOMM, "SM8750", "3nm, rilis Oktober 2024", "sun"),
+            Soc("d9600p", "Dimensity 9600 Pro", Vendor.MEDIATEK, "MT6995", "2nm, rilis September 2026", "mt6995"),
+            Soc("d9500", "Dimensity 9500", Vendor.MEDIATEK, "MT6993", "3nm, rilis September 2025", "mt6993"),
+            Soc("d9400p", "Dimensity 9400+", Vendor.MEDIATEK, "MT6991", "3nm, rilis 2025", "mt6991"),
+            Soc("d9300p", "Dimensity 9300+", Vendor.MEDIATEK, "MT6989", "4nm, rilis 2024", "mt6989")
         )
 
         private val PARTS = listOf("", "system.", "system_ext.", "vendor.", "odm.", "product.", "bootimage.")
         private val FIELDS = listOf("model", "brand", "manufacturer", "marketname")
-        private val SOC_KEYS = listOf("ro.soc.model", "ro.soc.manufacturer")
+        private val SOC_KEYS = listOf("ro.soc.model", "ro.soc.manufacturer", "ro.hardware.chipname")
+
+        /**
+         * Properti "Mode dalam": platform/hardware yang dibaca DevCheck dan sejenisnya untuk mengenali chip.
+         * Hanya diterapkan langsung (live) dan TIDAK ditulis ke module boot, supaya boot tidak pernah memakai nilai palsu
+         * dan restart selalu mengembalikannya.
+         */
+        val DEEP_KEYS = listOf("ro.board.platform", "ro.hardware", "ro.product.board", "ro.mediatek.platform", "ro.vendor.mediatek.platform")
 
         /** Semua properti yang boleh disentuh fitur ini (urutan tetap). */
-        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS
+        val ALL_KEYS: List<String> = PARTS.flatMap { p -> FIELDS.map { f -> "ro.product.$p$f" } } + SOC_KEYS + DEEP_KEYS
 
         private val SAFE_VALUE = Regex("^[A-Za-z0-9 ._+-]{1,48}$")
         private val SAFE_ID = Regex("^[A-Za-z0-9_-]{0,24}$")
@@ -81,8 +95,11 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         fun device(id: String?): Device? = DEVICES.firstOrNull { it.id == id }
         fun soc(id: String?): Soc? = SOCS.firstOrNull { it.id == id }
 
+        /** Bagian yang aman ditulis ke module boot (tanpa properti Mode dalam). */
+        fun persistable(props: Map<String, String>): Map<String, String> = props.filterKeys { it !in DEEP_KEYS }
+
         /** Daftar properti yang akan ditulis untuk pilihan ini (kosong bila keduanya null). */
-        fun propsFor(device: Device?, soc: Soc?): Map<String, String> {
+        fun propsFor(device: Device?, soc: Soc?, deep: Boolean = false): Map<String, String> {
             val m = linkedMapOf<String, String>()
             if (device != null) {
                 for (p in PARTS) {
@@ -95,6 +112,17 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             if (soc != null) {
                 m["ro.soc.model"] = soc.code
                 m["ro.soc.manufacturer"] = soc.vendor.manufacturer
+                m["ro.hardware.chipname"] = soc.code
+                val plat = soc.platform
+                if (deep && plat != null) {
+                    m["ro.board.platform"] = plat
+                    m["ro.hardware"] = soc.hardware ?: plat
+                    m["ro.product.board"] = plat
+                    if (soc.vendor == Vendor.MEDIATEK) {
+                        m["ro.mediatek.platform"] = soc.code
+                        m["ro.vendor.mediatek.platform"] = soc.code
+                    }
+                }
             }
             m.forEach { (k, v) ->
                 require(k in ALL_KEYS) { "Properti tidak dikenal: $k" }
@@ -104,7 +132,7 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         }
     }
 
-    private fun buildScript(mode: String, props: Map<String, String>, persist: Boolean, deviceId: String?, socId: String?): String {
+    private fun buildScript(mode: String, props: Map<String, String>, persist: Boolean, deviceId: String?, socId: String?, deep: Boolean = false): String {
         require(mode == "apply" || mode == "restore" || mode == "status") { "Mode tidak valid: $mode" }
         require(SAFE_ID.matches(deviceId.orEmpty()) && SAFE_ID.matches(socId.orEmpty())) { "ID tidak valid" }
         val tpl = ctx.assets.open("senza_fakedevice.sh").bufferedReader().use { it.readText() }
@@ -116,12 +144,13 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
                 else sb.append("restorep '").append(k).append("'\n")
             }
         }
-        val values = props.entries.joinToString("\n") { "${it.key}=${it.value}" }
+        val values = persistable(props).entries.joinToString("\n") { "${it.key}=${it.value}" }
         return tpl
             .replace("#MODE#", mode)
             .replace("#PERSIST#", if (persist) "1" else "0")
             .replace("#DEVICE_ID#", deviceId.orEmpty())
             .replace("#SOC_ID#", socId.orEmpty())
+            .replace("#DEEP#", if (deep) "1" else "0")
             .replace("#PROPS#", sb.toString().trimEnd())
             .replace("#VALUES#", values)
     }
@@ -143,26 +172,36 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         var soc: String? = null
         var boot = false
         var rp: String? = null
+        var deep = false
         r.output.lines().forEach { line ->
             val t = line.trim()
             when {
                 t.startsWith("device=") -> dev = t.removePrefix("device=").ifBlank { null }
                 t.startsWith("soc=") -> soc = t.removePrefix("soc=").ifBlank { null }
                 t == "boot=1" -> boot = true
+                t == "deep=1" -> deep = true
                 t.startsWith("rp=") -> rp = t.removePrefix("rp=").ifBlank { null }
             }
         }
-        return Status(dev, soc, boot, rp)
+        return Status(dev, soc, boot, rp, deep)
     }
 
     /** Terapkan pilihan (salah satu boleh null = tetap asli). Hasil diperiksa ulang oleh skrip. */
-    suspend fun apply(device: Device?, soc: Soc?, persist: Boolean): Outcome {
+    suspend fun apply(device: Device?, soc: Soc?, persist: Boolean, deep: Boolean = false): Outcome {
         if (device == null && soc == null) return Outcome(false, "Pilih device atau SoC dulu, atau gunakan Kembalikan ke asli.", emptyList())
-        val props = propsFor(device, soc)
-        val script = buildScript("apply", props, persist, device?.id, soc?.id)
+        val props = propsFor(device, soc, deep)
+        val script = buildScript("apply", props, persist, device?.id, soc?.id, deep && props.keys.any { it in DEEP_KEYS })
         val r = runScript(script, "terapkan fake device")
-        return parse(r.output, r.exitCode, props.size, persist)
+        val usedDeep = props.keys.any { it in DEEP_KEYS }
+        return parse(r.output, r.exitCode, props.size, persist, usedDeep, deep && soc != null && soc.platform == null)
     }
+
+    /**
+     * Restart zygote (soft restart): semua aplikasi dimulai ulang dan membaca properti terbaru, termasuk Build.HARDWARE
+     * yang di-cache zygote. Lebih cepat dari reboot, tetapi layar akan kembali ke lock screen.
+     */
+    suspend fun softRestart(): Boolean =
+        access.runRootEdit("setprop ctl.restart zygote; setprop ctl.restart zygote_secondary", "soft restart (zygote)", 10_000).ok
 
     /** Kembalikan semua properti ke nilai asli dan hapus module boot. */
     suspend fun restore(): Outcome {
@@ -172,7 +211,7 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
         else Outcome(false, "Gagal memulihkan: ${r.output.trim().take(160)}", fails)
     }
 
-    private fun parse(output: String, exitCode: Int, total: Int, persist: Boolean): Outcome {
+    private fun parse(output: String, exitCode: Int, total: Int, persist: Boolean, usedDeep: Boolean, deepUnavailable: Boolean): Outcome {
         val lines = output.lines().map { it.trim() }
         val fails = lines.filter { it.startsWith("GAGAL") }
         val okCount = lines.count { it.startsWith("OK ro.") }
@@ -186,6 +225,11 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
             else -> " Module boot gagal dipasang, hilang setelah restart."
         }
         val msg = if (fails.isEmpty()) "Berhasil: $okCount dari $total properti diterapkan." else "Sebagian berhasil: $okCount dari $total properti, ${fails.size} gagal."
-        return Outcome(fails.isEmpty(), msg + bootNote + " Restart perangkat agar game membaca nilai baru.", fails)
+        val deepNote = when {
+            deepUnavailable -> " Mode dalam dilewati: kode platform SoC ini belum diketahui, pilih SoC lain untuk DevCheck."
+            usedDeep -> " Mode dalam (platform/hardware) hanya berlaku sampai restart dan perlu diterapkan ulang setelah boot."
+            else -> ""
+        }
+        return Outcome(fails.isEmpty(), msg + bootNote + deepNote + " Restart perangkat agar game membaca nilai baru.", fails)
     }
 }
