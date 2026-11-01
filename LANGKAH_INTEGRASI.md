@@ -1,4 +1,4 @@
-# Patch SenzaAI — hapus AI, logo baru, tombol liquid glass
+# Patch SenzaTools — hapus AI, logo baru, tombol liquid glass
 
 Salin isi folder `app/` ke proyekmu (timpa file yang sama). Patch ini BELUM dikompilasi
 (tidak ada Android SDK di sini), jadi build dulu dan kirim error-nya kalau ada.

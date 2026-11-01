@@ -11,3 +11,6 @@
 *.aab
 *.jks
 *.keystore
+
+# Keystore penanda tangan APK proyek ini (dikomit supaya semua build CI memakai tanda tangan yang sama)
+!app/senza-release.jks

@@ -4,27 +4,50 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Nomor run GitHub Actions. Dipakai sebagai nomor build: tiap build CI lebih besar dari sebelumnya,
+// dan aplikasi membandingkannya dengan run sukses terbaru untuk meminta pembaruan. 0 = build lokal.
+val ciRunNumber: Int = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+
 android {
-    namespace = "com.senzaproject.senzaai"
+    namespace = "com.senzaproject.senzatools"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.senzaproject.senzaai"
+        applicationId = "com.senzaproject.senzatools"
         minSdk = 31          // Android 12
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = if (ciRunNumber > 0) ciRunNumber else 1
+        versionName = "1.2.0"
+
+        buildConfigField("int", "BUILD_NUMBER", "$ciRunNumber")
+        // Sumber update: run sukses terbaru workflow "Build APK" di branch main (API publik GitHub).
+        buildConfigField(
+            "String", "UPDATE_API",
+            "\"https://api.github.com/repos/SenzaProject/SenzaTools/actions/workflows/build-apk.yml/runs?branch=main&status=success&per_page=1\""
+        )
+        buildConfigField("String", "UPDATE_PAGE", "\"https://github.com/SenzaProject/SenzaTools/actions\"")
+    }
+
+    // Tanda tangan tetap. Runner GitHub membuat debug key baru di tiap build, sehingga APK dari run berbeda
+    // tidak bisa dipasang di atas satu sama lain ("aplikasi tidak terpasang"). Keystore ini ikut di repo;
+    // untuk distribusi publik, timpa lewat environment SENZA_KEYSTORE / SENZA_STORE_PASSWORD / SENZA_KEY_ALIAS / SENZA_KEY_PASSWORD.
+    signingConfigs {
+        create("senza") {
+            storeFile = file(System.getenv("SENZA_KEYSTORE") ?: "senza-release.jks")
+            storePassword = System.getenv("SENZA_STORE_PASSWORD") ?: "senzatools"
+            keyAlias = System.getenv("SENZA_KEY_ALIAS") ?: "senzatools"
+            keyPassword = System.getenv("SENZA_KEY_PASSWORD") ?: "senzatools"
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            signingConfig = signingConfigs.getByName("senza")
         }
         release {
             isMinifyEnabled = false
-            // Ditandatangani dengan debug key agar APK rilis langsung bisa dipasang untuk pengujian.
-            // Untuk distribusi publik, ganti dengan keystore sendiri.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("senza")
         }
     }
 
@@ -62,4 +85,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SenzaAI"
+rootProject.name = "SenzaTools"
 include(":app")

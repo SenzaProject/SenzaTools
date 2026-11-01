@@ -19,6 +19,11 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Unit tests (aturan keamanan Kernel Manager)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon testDebugUnitTest
+
       - name: Build debug + release APK
         run: |
           chmod +x ./gradlew
@@ -27,11 +32,11 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SenzaAI-debug-apk
+          name: SenzaTools-debug-apk
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: SenzaAI-release-apk
+          name: SenzaTools-release-apk
           path: app/build/outputs/apk/release/*.apk
