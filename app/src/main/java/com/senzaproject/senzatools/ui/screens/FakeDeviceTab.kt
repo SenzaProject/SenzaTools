@@ -138,7 +138,7 @@ fun FakeDeviceTab(s: ServiceLocator) {
                 tActive -> StatusPill("Berkas Transsion sedang diganti", g.warn)
                 else -> StatusPill("Berkas asli", g.good)
             }
-            Caption("Memakai bind-mount lewat Editor File Root: tanpa Magisk, berkas asli tidak ditimpa, dan tetap aktif setelah restart. Restart setelah menerapkan.")
+            Caption("Memakai bind-mount: tanpa Magisk, berkas asli tidak ditimpa, dan tetap aktif setelah restart. Restart setelah menerapkan.")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton("Terapkan ke berkas Transsion", {
                     scope.launch {

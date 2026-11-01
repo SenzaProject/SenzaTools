@@ -450,14 +450,13 @@ class FakeDeviceEngine(private val ctx: Context, private val access: AccessManag
     suspend fun transsionActive(info: TranssionInfo): Boolean =
         info.targets.isNotEmpty() && editor.overlays().any { it in info.targets }
 
-    /** Tulis SoC ke berkas Transsion lewat Editor File Root (bind-mount, tetap aktif setelah restart, tanpa Magisk). */
+    /** Tulis SoC ke berkas Transsion lewat bind-mount (tetap aktif setelah restart, tanpa Magisk). */
     suspend fun applyTranssion(soc: Soc): Outcome {
         val info = transsionInfo()
         val kind = info.kind ?: return Outcome(false, "Android ${info.sdk} belum didukung untuk berkas Transsion (butuh Android 14 atau lebih baru).", emptyList())
         if (info.targets.isEmpty()) return Outcome(false, "Berkas Transsion tidak ditemukan di HP ini.", emptyList())
-        if (editor.pending.value.isNotEmpty()) {
-            return Outcome(false, "Ada perubahan tertunda di Editor File Root. Terapkan atau buang dulu supaya tidak ikut terpasang.", emptyList())
-        }
+        // Editor file manual sudah dihapus dari UI: buang sisa perubahan tertunda lama supaya tidak ikut terpasang.
+        editor.pending.value.forEach { editor.discard(it.path) }
         val props = transsionProps(soc)
         var staged = 0
         for (path in info.targets) {

@@ -75,11 +75,12 @@ private fun SenzaRoot(s: ServiceLocator) {
                         Dest.ANALYZER -> AnalyzerScreen(s, analyzerVm)
                         Dest.TOOLS -> ToolsScreen(s)
                         Dest.TOOLKIT -> UtilitiesScreen(s)
-                        Dest.SETTINGS -> SettingsScreen(s)
+                        Dest.SETTINGS -> SettingsScreen(s) { current = Dest.HOME.name }
                     }
                 }
             }
         }
-        FloatingNavBar(dest, { current = it.name }, Modifier.align(Alignment.BottomCenter), backdrop)
+        // Settings adalah layar sub (dibuka dari Home), jadi bar navigasi disembunyikan di sana.
+        if (dest != Dest.SETTINGS) FloatingNavBar(dest, { current = it.name }, Modifier.align(Alignment.BottomCenter), backdrop)
     }
 }

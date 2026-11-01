@@ -85,17 +85,7 @@ import com.senzaproject.senzatools.i18n.tr
 @Composable
 fun GlassBackground(content: @Composable BoxScope.() -> Unit) {
     val g = LocalGlass.current
-    val reduced = LocalReducedEffects.current
-    val phase = if (reduced) {
-        0f
-    } else {
-        val t = rememberInfiniteTransition(label = "bg")
-        t.animateFloat(
-            initialValue = 0f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(18000, easing = LinearEasing), RepeatMode.Reverse),
-            label = "bgPhase"
-        ).value
-    }
+    // Latar statis: gradien lembut + dua bercak warna samar (cukup untuk efek kaca, tanpa animasi).
     Box(
         Modifier
             .fillMaxSize()
@@ -103,16 +93,15 @@ fun GlassBackground(content: @Composable BoxScope.() -> Unit) {
             .drawBehind {
                 val w = size.width
                 val h = size.height
-                val a = if (g.dark) 0.55f else 0.65f
+                val a = if (g.dark) 0.30f else 0.45f
                 fun blob(c: Color, cx: Float, cy: Float, r: Float) {
                     drawCircle(
                         brush = Brush.radialGradient(listOf(c.copy(alpha = a), Color.Transparent), center = Offset(cx, cy), radius = r),
                         radius = r, center = Offset(cx, cy)
                     )
                 }
-                blob(g.blob1, w * (0.15f + 0.25f * phase), h * (0.12f + 0.06f * phase), w * 0.75f)
-                blob(g.blob2, w * (0.95f - 0.25f * phase), h * (0.42f + 0.08f * phase), w * 0.70f)
-                blob(g.blob3, w * (0.25f + 0.2f * phase), h * (0.85f - 0.08f * phase), w * 0.80f)
+                blob(g.blob1, w * 0.10f, h * 0.06f, w * 0.80f)
+                blob(g.blob2, w * 0.95f, h * 0.90f, w * 0.80f)
             },
         content = content
     )
@@ -128,12 +117,12 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
 
 @Composable
 fun Title(text: String, modifier: Modifier = Modifier) {
-    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp)
 }
 
 @Composable
 fun Heading(text: String, modifier: Modifier = Modifier) {
-    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
@@ -153,20 +142,28 @@ fun Mono(text: String, modifier: Modifier = Modifier, size: Int = 12) {
 }
 
 @Composable
-fun ScreenScaffold(title: String, subtitle: String? = null, content: @Composable ColumnScope.() -> Unit) {
+fun ScreenScaffold(
+    title: String,
+    subtitle: String? = null,
+    action: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
-            .padding(bottom = 120.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(bottom = 112.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Spacer(Modifier.height(8.dp))
-        Column {
-            Title(title)
-            if (subtitle != null) Caption(subtitle)
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Title(title)
+                if (subtitle != null) Caption(subtitle)
+            }
+            action?.invoke()
         }
         content()
     }
@@ -178,19 +175,18 @@ fun ScreenScaffold(title: String, subtitle: String? = null, content: @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
     strong: Boolean = false,
-    padding: Dp = 16.dp,
+    padding: Dp = 14.dp,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val g = LocalGlass.current
-    val shape = RoundedCornerShape(24.dp)
-    val fill = if (strong) g.glassFillStrong else g.glassFill
+    val shape = RoundedCornerShape(20.dp)
     Column(
         modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Brush.linearGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.55f))))
-            .border(1.dp, Brush.linearGradient(listOf(g.borderHi, g.borderLo, g.borderHi.copy(alpha = 0.35f))), shape)
+            .background(if (strong) g.glassFillStrong else g.glassFill)
+            .border(1.dp, if (strong) g.borderHi else g.borderLo, shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(padding),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -218,11 +214,11 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
         Modifier
             .clip(RoundedCornerShape(50))
             .background(bg)
-            .border(1.dp, if (selected) g.borderHi.copy(alpha = 0.5f) else g.borderLo, RoundedCornerShape(50))
+            .border(1.dp, if (selected) Color.Transparent else g.borderLo, RoundedCornerShape(50))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
     ) {
-        Text(tr(text), color = fg, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
+        Text(tr(text), color = fg, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
     }
 }
 
@@ -242,7 +238,6 @@ fun StatusPill(text: String, color: Color) {
         Modifier
             .clip(RoundedCornerShape(50))
             .background(color.copy(alpha = 0.18f))
-            .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 3.dp)
     ) {
         Text(tr(text), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
@@ -371,7 +366,7 @@ fun GlassTextField(
         textStyle = androidx.compose.ui.text.TextStyle(
             color = g.text, fontSize = 14.sp, fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default
         ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = g.accent, unfocusedBorderColor = g.borderLo,
             focusedLabelColor = g.accent, unfocusedLabelColor = g.textDim,

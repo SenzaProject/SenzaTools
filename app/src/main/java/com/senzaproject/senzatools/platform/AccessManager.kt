@@ -158,7 +158,7 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
     }
 
     /**
-     * Perintah root yang disusun aplikasi sendiri (bukan teks bebas) untuk fitur Editor File Root.
+     * Perintah root yang disusun aplikasi sendiri (bukan teks bebas) untuk fitur yang menulis berkas sistem (mis. Fake Device).
      * Path sudah divalidasi PathGuard oleh pemanggil. Dicatat di log.
      */
     suspend fun runRootEdit(command: String, label: String, timeoutMs: Long = 30_000): ShellResult = withContext(Dispatchers.IO) {

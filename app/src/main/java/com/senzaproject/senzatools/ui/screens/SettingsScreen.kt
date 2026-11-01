@@ -2,6 +2,10 @@ package com.senzaproject.senzatools.ui.screens
 
 import android.os.Build
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -19,7 +23,7 @@ import com.senzaproject.senzatools.i18n.Lang
 import com.senzaproject.senzatools.update.UpdateState
 
 @Composable
-fun SettingsScreen(s: ServiceLocator) {
+fun SettingsScreen(s: ServiceLocator, onBack: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var cacheSize by remember { mutableStateOf(0L) }
@@ -30,30 +34,33 @@ fun SettingsScreen(s: ServiceLocator) {
 
     var showLang by remember { mutableStateOf(false) }
 
-    ScreenScaffold("Settings", "Tampilan dan privasi") {
-        GlassCard {
-            Heading("Bahasa")
-            Caption("Pilih bahasa tampilan aplikasi.")
-            GlassButton(Lang.displayName(), { showLang = true }, Modifier.fillMaxWidth())
+    ScreenScaffold(
+        "Settings", "Tampilan, privasi, dan pembaruan",
+        action = {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Rounded.Close, "Tutup", tint = com.senzaproject.senzatools.ui.theme.LocalGlass.current.textDim)
+            }
         }
-        if (showLang) LanguageDialog { showLang = false }
-
+    ) {
         GlassCard {
             Heading("Tampilan")
+            Caption("Bahasa")
+            GlassButton(Lang.displayName(), { showLang = true }, Modifier.fillMaxWidth())
             Caption("Tema")
             ChipRow(listOf("Ikuti sistem", "Terang", "Gelap"), s.uiPrefs.themeMode) { s.uiPrefs.setThemeMode(it) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(Modifier.weight(1f)) {
                     Body("Kurangi efek visual")
-                    Caption("Mematikan animasi latar untuk hemat baterai dan keterbacaan.")
+                    Caption("Matikan efek kaca cair di bar navigasi untuk hemat baterai.")
                 }
                 Chip(if (s.uiPrefs.reducedEffects) "Aktif" else "Nonaktif", s.uiPrefs.reducedEffects) { s.uiPrefs.setReducedEffects(!s.uiPrefs.reducedEffects) }
             }
         }
+        if (showLang) LanguageDialog { showLang = false }
 
         GlassCard {
             Heading("Privasi & data")
-            Body("• Semua analisis berjalan di perangkat.\n• Tidak ada telemetri, iklan, atau akun.\n• Kredensial jaringan (SSID/BSSID/sandi) tidak dikumpulkan.\n• Backup otomatis Android dinonaktifkan untuk aplikasi ini.\n• Lalu lintas jaringan keluar hanya dua: pemeriksaan pembaruan ke GitHub (api.github.com, tanpa data pribadi) dan tes diagnostik jaringan yang kamu jalankan.", dim = true)
+            Caption("Semua analisis berjalan di perangkat. Tidak ada telemetri, iklan, atau akun. Jaringan keluar hanya untuk cek pembaruan ke GitHub dan tes jaringan yang kamu jalankan.")
             KeyValue("Cache analisis", cacheSize.formatBytes())
             GlassButton("Bersihkan cache", {
                 Saf.clearCache(ctx)
@@ -65,13 +72,10 @@ fun SettingsScreen(s: ServiceLocator) {
 
         GlassCard {
             Heading("Tentang")
-            KeyValue("Aplikasi", "Senza Tools")
             KeyValue("Versi", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             KeyValue("Build CI", if (BuildConfig.BUILD_NUMBER > 0) "#${BuildConfig.BUILD_NUMBER}" else "Build lokal")
             KeyValue("Pengembang", "SenzaProject")
-            KeyValue("Perangkat", "${Build.MANUFACTURER} ${Build.MODEL}")
-            KeyValue("Android", "${Build.VERSION.RELEASE} / SDK ${Build.VERSION.SDK_INT}")
-            Caption("Intelligent Android. Smarter System Control.")
+            KeyValue("Perangkat", "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
         }
     }
 }
@@ -95,7 +99,7 @@ private fun UpdateCard(s: ServiceLocator) {
                 is UpdateState.Idle -> "Belum diperiksa"
             }
         )
-        Caption("Sumber: GitHub Actions SenzaProject/SenzaTools. Bila ada build yang lebih baru, aplikasi meminta pembaruan dan tidak bisa dipakai sebelum diperbarui.")
+        Caption("Sumber: GitHub Actions SenzaProject/SenzaTools.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassButton(if (busy) "Memeriksa…" else "Periksa pembaruan", {
                 scope.launch {

@@ -144,11 +144,9 @@
   "Buka halaman pengaturan yang sering dipakai langsung dari satu tempat.": "Open frequently used settings pages directly from one place.",
   "Buka": "Open",
   "Akses": "Access",
-  "File Root": "Root Files",
   "Shell & ADB": "Shell & ADB",
   "Monitor": "Monitor",
   "Performa": "Performance",
-  "Akses, penjelajah file, shell, ADB, monitor performa": "Access, file explorer, shell, ADB, performance monitor",
   "Verifikasi akses root": "Verify root access",
   "Senza Tools akan meminta izin root satu kali (menjalankan \"su -c id\") untuk memastikan akses. Root manager akan menampilkan permintaan persetujuan.\n\nSetelah aktif, Senza Tools hanya menjalankan aksi baca-saja yang sudah ditentukan, atau perintah yang kamu ketik dan konfirmasi sendiri. Semua tercatat di Log.": "Senza Tools will request root permission once (running \"su -c id\") to confirm access. Your root manager will show an approval prompt.\n\nOnce active, Senza Tools only runs predefined read-only actions, or commands that you type and confirm yourself. Everything is recorded in the Log.",
   "Minta izin root": "Request root permission",
@@ -166,7 +164,6 @@
   "Tidak terdeteksi": "Not detected",
   "Integrasi eksekusi lewat Shizuku belum disertakan di versi ini. Senza Tools tidak menganggap Shizuku, ADB, dan Root setara; fitur yang butuh root tidak akan berjalan hanya dengan Shizuku.": "Execution through Shizuku is not included in this version. Senza Tools does not treat Shizuku, ADB, and Root as equal; features that need root will not run with Shizuku alone.",
   "Prinsip keamanan": "Security principles",
-  "• Read-only secara default; edit file hanya lewat Editor File Root (simpan dulu, terapkan manual, backup otomatis)\n• Tidak ada operasi root tersembunyi atau diam-diam\n• Perintah berbahaya (format, tulis ke partisi, hapus sistem) diblokir\n• Seluruh operasi sensitif dicatat": "• Read-only by default; files are edited only through the Root File Editor (save first, apply manually, automatic backup)\n• No hidden or silent root operations\n• Dangerous commands (format, write to partitions, delete system) are blocked\n• All sensitive operations are logged",
   "Otomatis": "Automatic",
   "Langsung": "Direct",
   "Overlay Magisk": "Magisk overlay",
@@ -1153,5 +1150,8 @@
   "Fast charge (USB)": "Fast charge (USB)",
   "MSM thermal": "MSM thermal",
   "Batas suhu throttle": "Throttle temperature limit",
-  "Mematikan ini menghilangkan proteksi panas kernel — HP bisa terlalu panas.": "Turning this off removes the kernel's heat protection — the phone can overheat."
+  "Mematikan ini menghilangkan proteksi panas kernel — HP bisa terlalu panas.": "Turning this off removes the kernel's heat protection — the phone can overheat.",
+  "Akses, shell, monitor, performa": "Access, shell, monitor, performance",
+  "• Read-only secara default; perubahan sistem hanya lewat fitur yang kamu jalankan sendiri\n• Tidak ada operasi root tersembunyi atau diam-diam\n• Perintah berbahaya (format, tulis ke partisi, hapus sistem) diblokir\n• Seluruh operasi sensitif dicatat": "• Read-only by default; system changes only through features you run yourself\n• No hidden or silent root operations\n• Dangerous commands (format, write to partitions, delete system) are blocked\n• All sensitive operations are logged",
+  "Memakai bind-mount: tanpa Magisk, berkas asli tidak ditimpa, dan tetap aktif setelah restart. Restart setelah menerapkan.": "Uses bind-mount: no Magisk needed, the original file is not overwritten, and it stays active after restart. Restart after applying."
 }

@@ -170,7 +170,7 @@ private fun LiquidNavBar(
 ) {
     val g = LocalGlass.current
     val density = LocalDensity.current
-    val items = Dest.values()
+    val items = Dest.inNav
     val n = items.size
     val scope = rememberCoroutineScope()
     val barShape = RoundedCornerShape(BarHeight / 2)
@@ -427,7 +427,7 @@ private fun FlatNavBar(current: Dest, onSelect: (Dest) -> Unit, modifier: Modifi
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Dest.values().forEach { d ->
+            Dest.inNav.forEach { d ->
                 val sel = d == current
                 Column(
                     Modifier
