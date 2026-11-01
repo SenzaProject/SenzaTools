@@ -58,3 +58,10 @@ Home · Device · Analyzer · Tools · Toolkit · Settings (floating glass nav b
 
 ## Rencana lanjutan
 Shizuku exec, Room untuk riwayat jangka panjang, Hilt, modul Gradle terpisah (`core/`, `feature/`), pengujian instrumentasi di Android 12–16.
+
+## Kernel Manager (Toolkit → Kernel)
+- ✅ 50 pengaturan kernel diporting dari SmartPack: CPU boost, GPU (Adreno idler, devfreq boost, kgsl), RAM (swappiness, VM dirty, min_free, KSM, LMK), Thermal (MSM), I/O (scheduler, read-ahead…), Baterai (fast charge, BLX), TCP, scheduler.
+- ✅ Deteksi kompatibilitas per node (Siap / Baca-saja / Dilindungi / Tidak ada + alasan) berdasarkan SoC, kernel, SELinux, dan keberadaan node.
+- ✅ Whitelist + validasi + baca-ulang + rollback otomatis; nilai asli, Urungkan, snapshot bernama; "Terapkan saat boot" dengan boot guard.
+- ⚠️ Bergantung kernel/ROM; node berisiko tinggi (proteksi thermal, LMK) butuh konfirmasi dan tidak ikut boot otomatis. Lihat [KERNEL.md](KERNEL.md).
+

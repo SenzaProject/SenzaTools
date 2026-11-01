@@ -19,6 +19,11 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Unit tests (aturan keamanan Kernel Manager)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon testDebugUnitTest
+
       - name: Build debug + release APK
         run: |
           chmod +x ./gradlew

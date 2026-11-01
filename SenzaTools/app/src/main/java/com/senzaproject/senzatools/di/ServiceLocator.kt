@@ -29,6 +29,7 @@ class ServiceLocator(val app: Application) {
     val monitor by lazy { PerformanceMonitor(device, access) }
     val history by lazy { HistoryStore(app) }
     val unpack by lazy { com.senzaproject.senzatools.platform.root.UnpackEngine(app, access, operationLog) }
+    val kernel by lazy { com.senzaproject.senzatools.kernel.KernelEngine(app, access, com.senzaproject.senzatools.kernel.KernelStore(app)) }
     val uiPrefs by lazy { UiPrefs(app) }
     val session = SessionContext()
 }

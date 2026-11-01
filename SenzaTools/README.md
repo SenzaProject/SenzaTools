@@ -45,6 +45,7 @@ Gunakan Personal Access Token GitHub sebagai password.
 
 ## Dokumentasi
 - [docs/UNPACK_REPACK.md](docs/UNPACK_REPACK.md) — fitur Unpack & Repack ROM (Toolkit)
+- [docs/KERNEL.md](docs/KERNEL.md) — Kernel Manager (porting dari SmartPack): CPU/GPU/RAM/Thermal/I/O, keamanan, boot guard
 - [docs/FEATURES.md](docs/FEATURES.md) — fitur dan batasannya
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — struktur dan keputusan desain
 - [docs/SECURITY.md](docs/SECURITY.md) — model keamanan dan privasi

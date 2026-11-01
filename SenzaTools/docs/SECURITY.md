@@ -17,6 +17,9 @@
 ## Operasi berbahaya
 Fitur tulis (Editor File Root, kunci refresh rate, profil performa) hanya berjalan atas perintah pengguna dengan konfirmasi, backup otomatis, verifikasi hasil, dan log. Aplikasi tidak menulis langsung ke blok partisi dan tidak memformat atau menghapus data.
 
+## Kernel Manager
+Fitur tulis kernel hanya lewat `KernelEngine`: whitelist path dari katalog, validasi nilai dan aturan lintas-node sebelum menulis, baca-ulang + rollback, cadangan stock/undo, dan boot guard. Node berisiko tinggi tidak ikut penerapan saat boot. Detail di [KERNEL.md](KERNEL.md).
+
 ## Tanda tangan APK
 Keystore `app/senza-release.jks` ikut di repo supaya semua build CI memakai tanda tangan yang sama (syarat agar APK baru bisa dipasang di atas yang lama). Karena repo-nya terbuka, siapa pun bisa menandatangani APK dengan kunci itu. Untuk distribusi publik, buat keystore pribadi dan berikan lewat environment `SENZA_KEYSTORE`, `SENZA_STORE_PASSWORD`, `SENZA_KEY_ALIAS`, `SENZA_KEY_PASSWORD` (mis. GitHub Secrets).
 

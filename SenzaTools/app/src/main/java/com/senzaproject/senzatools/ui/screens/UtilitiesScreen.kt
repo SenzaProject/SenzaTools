@@ -30,7 +30,7 @@ fun copyText(ctx: Context, label: String, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "Sinyal", "Charger", "Unpack & Repack")
+private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "Sinyal", "Charger", "Kernel", "Unpack & Repack")
 
 /** Alat bantu praktis untuk pengembang ROM, tanpa internet. */
 @Composable
@@ -49,6 +49,7 @@ fun UtilitiesScreen(s: ServiceLocator) {
             7 -> RamTab(s)
             8 -> SignalTab(s)
             9 -> ChargerTab(s)
+            10 -> KernelTab(s)
             else -> UnpackRepackTab(s)
         }
     }

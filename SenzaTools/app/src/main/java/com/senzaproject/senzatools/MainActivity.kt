@@ -41,6 +41,8 @@ class MainActivity : ComponentActivity() {
         val services = (application as SenzaApp).services
         // Root diminta sekali saat apk dibuka; kalau sudah diizinkan di root manager, langsung aktif tanpa dialog.
         services.access.autoRequestRootOnce()
+        // Bila "Terapkan saat boot" kernel aktif: tandai boot ini stabil setelah root terverifikasi dan uptime cukup.
+        services.kernel.confirmStableLater()
         setContent {
             CompositionLocalProvider(LocalServices provides services) {
                 SenzaTheme(services.uiPrefs.themeMode, services.uiPrefs.reducedEffects) {
