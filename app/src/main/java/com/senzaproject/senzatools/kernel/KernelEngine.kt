@@ -150,7 +150,7 @@ class KernelEngine(private val ctx: Context, private val access: AccessManager, 
 
     // ------------------------------------------------------------------ Boot
 
-    private fun bootRun(cmd: String, label: String) = access.runRootEdit(cmd, label, 15_000)
+    private suspend fun bootRun(cmd: String, label: String) = access.runRootEdit(cmd, label, 15_000)
 
     suspend fun bootStatus(): BootStatus = withContext(Dispatchers.IO) {
         val d = KernelRules.BOOT_DIR
