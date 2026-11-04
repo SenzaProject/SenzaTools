@@ -101,7 +101,6 @@ private fun AccessTab(s: ServiceLocator) {
 private fun ShellTab(s: ServiceLocator) {
     AdbInfoCard(s)
     PackageCard(s)
-    LogcatCard(s)
     ConsoleCard(s)
     FastbootCard()
 }
@@ -191,46 +190,6 @@ private fun PackageCard(s: ServiceLocator) {
         selected?.let { sel ->
             GlassDivider()
             sel.forEach { KeyValue(it.first, it.second) }
-        }
-    }
-}
-
-@Composable
-private fun LogcatCard(s: ServiceLocator) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var filter by remember { mutableStateOf("") }
-    var level by remember { mutableStateOf(0) }
-    val levels = listOf("Semua", "W+", "E+")
-    val rootOk = s.access.isRootVerified
-    ExpandableCard("Logcat viewer", false) {
-        Caption(if (rootOk) "Mode root: log sistem penuh." else "Normal Access: Android hanya memberi log milik aplikasi ini. Untuk log sistem, verifikasi root atau ekspor log lewat adb dari komputer.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassButton(if (busy) "Mengambil…" else "Ambil logcat", {
-                scope.launch {
-                    busy = true
-                    text = s.access.run(SafeAction.Logcat, rootOk).output
-                    busy = false
-                }
-            }, primary = true, enabled = !busy)
-            GlassButton("Salin log", { text?.let { copyText(ctx, "logcat", it.takeLast(60_000)) } }, enabled = text != null)
-        }
-        ChipRow(levels, level) { level = it }
-        GlassTextField(filter, { filter = it }, "Filter teks")
-        text?.let { t ->
-            val lines = remember(t, filter, level) {
-                t.lines().filter { l ->
-                    (filter.isBlank() || l.contains(filter, true)) && when (level) {
-                        1 -> Regex("""\s[WEF]\s""").containsMatchIn(l)
-                        2 -> Regex("""\s[EF]\s""").containsMatchIn(l)
-                        else -> true
-                    }
-                }.takeLast(400)
-            }
-            Caption("${lines.size} baris (maks 400 terakhir)")
-            SelectionContainer { Mono(lines.joinToString("\n").ifBlank { "(kosong)" }, size = 10) }
         }
     }
 }

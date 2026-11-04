@@ -30,13 +30,13 @@ fun copyText(ctx: Context, label: String, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-private val TABS = listOf("Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "zRAM", "DNS", "Sinyal", "Charger", "Kernel", "Fake Device")
+private val TABS = listOf("Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "zRAM", "DNS", "Logcat", "SELinux", "Sinyal", "Charger", "Kernel", "Fake Device")
 
 /** Alat bantu praktis untuk pengembang ROM, tanpa internet. */
 @Composable
 fun UtilitiesScreen(s: ServiceLocator) {
     var tab by rememberSaveable { mutableStateOf(0) }
-    ScreenScaffold("Toolkit", "Daya, game, DPI, RAM, zRAM, DNS, sinyal, charger, dan fake device") {
+    ScreenScaffold("Toolkit", "Daya, game, DPI, RAM, zRAM, DNS, logcat, SELinux, sinyal, charger, dan fake device") {
         ChipRow(TABS, tab) { tab = it }
         when (tab) {
             0 -> PowerTab(s)
@@ -47,9 +47,11 @@ fun UtilitiesScreen(s: ServiceLocator) {
             5 -> RamTab(s)
             6 -> ZramTab(s)
             7 -> DnsTab(s)
-            8 -> SignalTab(s)
-            9 -> ChargerTab(s)
-            10 -> KernelTab(s)
+            8 -> LogcatTab(s)
+            9 -> SelinuxControlTab(s)
+            10 -> SignalTab(s)
+            11 -> ChargerTab(s)
+            12 -> KernelTab(s)
             else -> FakeDeviceTab(s)
         }
     }
