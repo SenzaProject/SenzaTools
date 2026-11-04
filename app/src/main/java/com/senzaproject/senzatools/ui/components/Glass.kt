@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -52,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -84,27 +86,7 @@ import com.senzaproject.senzatools.i18n.tr
 
 @Composable
 fun GlassBackground(content: @Composable BoxScope.() -> Unit) {
-    val g = LocalGlass.current
-    // Latar statis: gradien lembut + dua bercak warna samar (cukup untuk efek kaca, tanpa animasi).
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(g.bgTop, g.bgBottom)))
-            .drawBehind {
-                val w = size.width
-                val h = size.height
-                val a = if (g.dark) 0.30f else 0.45f
-                fun blob(c: Color, cx: Float, cy: Float, r: Float) {
-                    drawCircle(
-                        brush = Brush.radialGradient(listOf(c.copy(alpha = a), Color.Transparent), center = Offset(cx, cy), radius = r),
-                        radius = r, center = Offset(cx, cy)
-                    )
-                }
-                blob(g.blob1, w * 0.10f, h * 0.06f, w * 0.80f)
-                blob(g.blob2, w * 0.95f, h * 0.90f, w * 0.80f)
-            },
-        content = content
-    )
+    Box(Modifier.fillMaxSize().background(LocalGlass.current.bgTop), content = content)
 }
 
 // ------------------------------------------------------------------ Util
@@ -117,23 +99,23 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
 
 @Composable
 fun Title(text: String, modifier: Modifier = Modifier) {
-    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
 }
 
 @Composable
 fun Heading(text: String, modifier: Modifier = Modifier) {
-    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    Text(tr(text), modifier, color = LocalGlass.current.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
 fun Body(text: String, modifier: Modifier = Modifier, dim: Boolean = false, color: Color? = null, maxLines: Int = Int.MAX_VALUE) {
     val g = LocalGlass.current
-    Text(tr(text), modifier, color = color ?: if (dim) g.textDim else g.text, fontSize = 14.sp, lineHeight = 20.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+    Text(tr(text), modifier, color = color ?: if (dim) g.textDim else g.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
 fun Caption(text: String, modifier: Modifier = Modifier, color: Color? = null) {
-    Text(tr(text), modifier, color = color ?: LocalGlass.current.textDim, fontSize = 12.sp, lineHeight = 16.sp)
+    Text(tr(text), modifier, color = color ?: LocalGlass.current.textDim, fontSize = 11.5.sp, lineHeight = 15.sp)
 }
 
 @Composable
@@ -154,12 +136,12 @@ fun ScreenScaffold(
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
-            .padding(bottom = 112.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Title(title)
                 if (subtitle != null) Caption(subtitle)
             }
@@ -175,12 +157,12 @@ fun ScreenScaffold(
 fun GlassCard(
     modifier: Modifier = Modifier,
     strong: Boolean = false,
-    padding: Dp = 14.dp,
+    padding: Dp = 12.dp,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val g = LocalGlass.current
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(14.dp)
     Column(
         modifier
             .fillMaxWidth()
@@ -189,7 +171,7 @@ fun GlassCard(
             .border(1.dp, if (strong) g.borderHi else g.borderLo, shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(padding),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         content = content
     )
 }
@@ -203,22 +185,53 @@ fun GlassButton(
     enabled: Boolean = true,
     danger: Boolean = false,
     icon: ImageVector? = null
-) = LiquidGlassButton(text, onClick, modifier, primary = primary, danger = danger, enabled = enabled, icon = icon)
+
+) {
+    val g = LocalGlass.current
+    val shape = RoundedCornerShape(10.dp)
+    val bg = when {
+        danger -> g.bad.copy(alpha = 0.14f)
+        primary -> g.accent
+        else -> g.glassFillStrong
+    }
+    val fg = when {
+        danger -> g.bad
+        primary -> Color.White
+        else -> g.text
+    }
+    Row(
+        modifier
+            .heightIn(min = 38.dp)
+            .alpha(if (enabled) 1f else 0.45f)
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, if (primary) Color.Transparent else g.borderHi, shape)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) {
+            Icon(icon, null, tint = fg, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(tr(text), color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
 
 @Composable
 fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     val g = LocalGlass.current
-    val bg by animateColorAsState(if (selected) g.accent.copy(alpha = if (g.dark) 0.45f else 0.9f) else g.glassFill, label = "chip")
-    val fg = if (selected) (if (g.dark) g.text else Color.White) else g.text
+    val shape = RoundedCornerShape(50)
     Box(
         Modifier
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .border(1.dp, if (selected) Color.Transparent else g.borderLo, RoundedCornerShape(50))
+            .clip(shape)
+            .background(if (selected) g.accent else g.glassFillStrong)
+            .border(1.dp, if (selected) Color.Transparent else g.borderLo, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        Text(tr(text), color = fg, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+        Text(tr(text), color = if (selected) Color.White else g.text, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
     }
 }
 
@@ -226,7 +239,7 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
 fun ChipRow(items: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         items.forEachIndexed { i, s -> Chip(s, i == selected) { onSelect(i) } }
     }
@@ -284,8 +297,8 @@ fun InfoSectionCard(section: InfoSection, startExpanded: Boolean = true) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 section.rows.forEach { r ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(tr(r.label), Modifier.weight(0.42f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
-                        Text(tr(r.value), Modifier.weight(0.58f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+                        Text(tr(r.label), Modifier.weight(0.42f), color = LocalGlass.current.textDim, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text(tr(r.value), Modifier.weight(0.58f), color = LocalGlass.current.text, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -307,7 +320,7 @@ fun ExpandableCard(title: String, startExpanded: Boolean = false, trailing: Stri
                 Caption(trailing)
                 Spacer(Modifier.width(8.dp))
             }
-            Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = g.textDim)
+            Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = g.textDim, modifier = Modifier.size(20.dp))
         }
         if (open) content()
     }
@@ -328,9 +341,9 @@ fun <T> LimitedList(items: List<T>, initial: Int = 40, step: Int = 80, row: @Com
 
 @Composable
 fun KeyValue(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(tr(label), Modifier.weight(0.4f), color = LocalGlass.current.textDim, fontSize = 13.sp, lineHeight = 18.sp)
-        Text(tr(value), Modifier.weight(0.6f), color = LocalGlass.current.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(tr(label), Modifier.weight(0.42f), color = LocalGlass.current.textDim, fontSize = 12.sp, lineHeight = 16.sp)
+        Text(tr(value), Modifier.weight(0.58f), color = LocalGlass.current.text, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -388,10 +401,10 @@ fun ConfirmDialog(
     val g = LocalGlass.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = if (g.dark) Color(0xFF151B3D) else Color(0xFFF4F6FF),
-        shape = RoundedCornerShape(28.dp),
-        title = { Text(tr(title), color = g.text, fontWeight = FontWeight.SemiBold) },
-        text = { Text(tr(message), color = g.text, fontSize = 14.sp, lineHeight = 20.sp) },
+        containerColor = g.glassFill,
+        shape = RoundedCornerShape(16.dp),
+        title = { Text(tr(title), color = g.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+        text = { Text(tr(message), color = g.text, fontSize = 13.sp, lineHeight = 18.sp) },
         confirmButton = { TextButton(onClick = onConfirm) { Text(tr(confirmText), color = if (danger) g.bad else g.accent, fontWeight = FontWeight.Bold) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("Batal"), color = g.textDim) } }
     )
@@ -410,20 +423,20 @@ fun RingGauge(value: Float?, label: String, sub: String? = null, modifier: Modif
         value >= 75f -> g.warn
         else -> g.accent2
     }
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(Modifier.size(size), contentAlignment = Alignment.Center) {
             Canvas(Modifier.fillMaxSize()) {
-                val stroke = Stroke(width = this.size.minDimension * 0.11f, cap = StrokeCap.Round)
+                val stroke = Stroke(width = this.size.minDimension * 0.10f, cap = StrokeCap.Round)
                 val inset = stroke.width / 2
                 val arcSize = Size(this.size.width - stroke.width, this.size.height - stroke.width)
                 drawArc(g.glassFillStrong, 135f, 270f, false, Offset(inset, inset), arcSize, style = stroke)
                 if (value != null) {
-                    drawArc(Brush.sweepGradient(listOf(color.copy(alpha = 0.6f), color)), 135f, 270f * progress, false, Offset(inset, inset), arcSize, style = stroke)
+                    drawArc(color, 135f, 270f * progress, false, Offset(inset, inset), arcSize, style = stroke)
                 }
             }
-            Text(if (value == null) "—" else "${value.toInt()}%", color = g.text, fontSize = (size.value * 0.22f).sp, fontWeight = FontWeight.Bold)
+            Text(if (value == null) "—" else "${value.toInt()}%", color = g.text, fontSize = (size.value * 0.21f).sp, fontWeight = FontWeight.Bold)
         }
-        Text(tr(label), color = g.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(tr(label), color = g.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         if (sub != null) Caption(sub)
     }
 }
@@ -491,8 +504,8 @@ fun BarMeter(percent: Float, modifier: Modifier = Modifier) {
     val g = LocalGlass.current
     val p by animateFloatAsState((percent / 100f).coerceIn(0f, 1f), tween(500), label = "bar")
     val color = if (percent >= 90f) g.bad else if (percent >= 75f) g.warn else g.accent2
-    Box(modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(50)).background(g.glassFillStrong)) {
-        Box(Modifier.fillMaxSize(p).clip(RoundedCornerShape(50)).background(Brush.horizontalGradient(listOf(color.copy(alpha = 0.7f), color))))
+    Box(modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)).background(g.glassFillStrong)) {
+        Box(Modifier.fillMaxSize(p).clip(RoundedCornerShape(50)).background(color))
     }
 }
 

@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -12,9 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.BackHandler
 import com.senzaproject.senzatools.di.LocalServices
@@ -22,9 +22,8 @@ import com.senzaproject.senzatools.di.ServiceLocator
 import com.senzaproject.senzatools.navigation.Dest
 import com.senzaproject.senzatools.ui.AnalyzerViewModel
 import com.senzaproject.senzatools.ui.VmFactory
-import com.senzaproject.senzatools.ui.components.FloatingNavBar
+import com.senzaproject.senzatools.ui.components.BottomNavBar
 import com.senzaproject.senzatools.ui.components.GlassBackground
-import com.senzaproject.senzatools.ui.components.recordInto
 import com.senzaproject.senzatools.ui.screens.AnalyzerScreen
 import com.senzaproject.senzatools.ui.screens.DeviceScreen
 import com.senzaproject.senzatools.ui.screens.HomeScreen
@@ -45,7 +44,7 @@ class MainActivity : ComponentActivity() {
         services.kernel.confirmStableLater()
         setContent {
             CompositionLocalProvider(LocalServices provides services) {
-                SenzaTheme(services.uiPrefs.themeMode, services.uiPrefs.reducedEffects) {
+                SenzaTheme(services.uiPrefs.themeMode) {
                     UpdateGate(services) { SenzaRoot(services) }
                 }
             }
@@ -62,25 +61,20 @@ private fun SenzaRoot(s: ServiceLocator) {
 
     BackHandler(enabled = dest != Dest.HOME) { current = Dest.HOME.name }
 
-    // Isi layar direkam ke layer ini supaya bar navigasi bisa mem-blur & membiaskannya (liquid glass).
-    val backdrop = rememberGraphicsLayer()
-
-    Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().recordInto(backdrop)) {
-            GlassBackground {
-                Box(Modifier.fillMaxSize()) {
-                    when (dest) {
-                        Dest.HOME -> HomeScreen(s) { current = it.name }
-                        Dest.DEVICE -> DeviceScreen(s)
-                        Dest.ANALYZER -> AnalyzerScreen(s, analyzerVm)
-                        Dest.TOOLS -> ToolsScreen(s)
-                        Dest.TOOLKIT -> UtilitiesScreen(s)
-                        Dest.SETTINGS -> SettingsScreen(s) { current = Dest.HOME.name }
-                    }
+    GlassBackground {
+        Column(Modifier.fillMaxSize()) {
+            // Settings adalah layar sub (dibuka dari Home), jadi bar navigasi disembunyikan di sana.
+            Box(Modifier.weight(1f).fillMaxWidth().then(if (dest == Dest.SETTINGS) Modifier.navigationBarsPadding() else Modifier)) {
+                when (dest) {
+                    Dest.HOME -> HomeScreen(s) { current = it.name }
+                    Dest.DEVICE -> DeviceScreen(s)
+                    Dest.ANALYZER -> AnalyzerScreen(s, analyzerVm)
+                    Dest.TOOLS -> ToolsScreen(s)
+                    Dest.TOOLKIT -> UtilitiesScreen(s)
+                    Dest.SETTINGS -> SettingsScreen(s) { current = Dest.HOME.name }
                 }
             }
+            if (dest != Dest.SETTINGS) BottomNavBar(dest, { current = it.name })
         }
-        // Settings adalah layar sub (dibuka dari Home), jadi bar navigasi disembunyikan di sana.
-        if (dest != Dest.SETTINGS) FloatingNavBar(dest, { current = it.name }, Modifier.align(Alignment.BottomCenter), backdrop)
     }
 }

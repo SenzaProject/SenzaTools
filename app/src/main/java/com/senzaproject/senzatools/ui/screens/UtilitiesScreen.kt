@@ -30,111 +30,27 @@ fun copyText(ctx: Context, label: String, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-private val TABS = listOf("Diagnostik", "Properti", "Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "zRAM", "Sinyal", "Charger", "Kernel", "Fake Device")
+private val TABS = listOf("Daya", "Ekspor", "Pintasan", "Game", "DPI", "RAM", "zRAM", "DNS", "Sinyal", "Charger", "Kernel", "Fake Device")
 
 /** Alat bantu praktis untuk pengembang ROM, tanpa internet. */
 @Composable
 fun UtilitiesScreen(s: ServiceLocator) {
     var tab by rememberSaveable { mutableStateOf(0) }
-    ScreenScaffold("Toolkit", "Diagnostik, mode game, DPI, RAM, zRAM, sinyal, fast charger, fake device, dan lainnya") {
+    ScreenScaffold("Toolkit", "Daya, game, DPI, RAM, zRAM, DNS, sinyal, charger, dan fake device") {
         ChipRow(TABS, tab) { tab = it }
         when (tab) {
-            0 -> DiagTab(s)
-            1 -> PropsTab()
-            2 -> PowerTab(s)
-            3 -> ExportTab(s)
-            4 -> ShortcutsTab()
-            5 -> GameFocusTab(s)
-            6 -> DpiTab(s)
-            7 -> RamTab(s)
-            8 -> ZramTab(s)
-            9 -> SignalTab(s)
-            10 -> ChargerTab(s)
-            11 -> KernelTab(s)
+            0 -> PowerTab(s)
+            1 -> ExportTab(s)
+            2 -> ShortcutsTab()
+            3 -> GameFocusTab(s)
+            4 -> DpiTab(s)
+            5 -> RamTab(s)
+            6 -> ZramTab(s)
+            7 -> DnsTab(s)
+            8 -> SignalTab(s)
+            9 -> ChargerTab(s)
+            10 -> KernelTab(s)
             else -> FakeDeviceTab(s)
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------- Diagnostik
-
-@Composable
-private fun DiagTab(s: ServiceLocator) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf(false) }
-    val report = s.session.lastDiagnostic
-    GlassCard(strong = true) {
-        Heading("Senza Smart Diagnostics")
-        Body("Pemeriksaan lokal (tanpa internet): baterai, RAM, penyimpanan, suhu, SELinux, patch keamanan, dan konfigurasi build. Setiap temuan menyertakan bukti dan tingkat kepastian.", dim = true)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassButton(if (busy) "Memeriksa…" else "Jalankan diagnostik", {
-                if (!busy) scope.launch {
-                    busy = true
-                    s.session.lastDiagnostic = withContext(Dispatchers.IO) { s.diagnostics.run() }
-                    busy = false
-                }
-            }, Modifier.weight(1f), primary = true, enabled = !busy)
-            GlassButton("Bagikan laporan", {
-                val txt = report?.let { s.diagnostics.toText(it) } ?: return@GlassButton
-                val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, txt) }
-                ctx.startActivity(Intent.createChooser(send, "Bagikan laporan").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }, Modifier.weight(1f), enabled = report != null)
-        }
-    }
-    report?.findings?.forEach { f ->
-        GlassCard {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Heading(f.title, Modifier.weight(1f))
-                SeverityPill(f.severity)
-            }
-            KeyValue("Bukti", f.evidence)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Caption("Kepastian")
-                CertaintyPill(f.certainty)
-            }
-            Body("Rekomendasi: ${f.recommendation}", dim = true)
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------- Properti
-
-@Composable
-private fun PropsTab() {
-    val ctx = LocalContext.current
-    var q by remember { mutableStateOf("") }
-    var reload by remember { mutableStateOf(0) }
-    var copied by remember { mutableStateOf<String?>(null) }
-    val props by produceState<List<Pair<String, String>>?>(null, reload) {
-        value = withContext(Dispatchers.IO) {
-            Sys.refreshProps().entries.map { it.key to it.value }.sortedBy { it.first }
-        }
-    }
-    GlassCard(strong = true) {
-        Heading("Pencari properti sistem")
-        Body("Cari seluruh getprop (ro.*, persist.*, sys.*, vendor.*). Ketuk baris untuk menyalin.", dim = true)
-        GlassTextField(q, { q = it }, "Cari kunci atau nilai (mis. ro.product, mt6789)", mono = true)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassButton("Muat ulang", { reload++ }, Modifier.weight(1f), primary = true)
-            GlassButton("Salin hasil", {
-                val list = props?.filter { q.isBlank() || it.first.contains(q, true) || it.second.contains(q, true) }.orEmpty()
-                copyText(ctx, "getprop", list.joinToString("\n") { "[${it.first}]: [${it.second}]" })
-                copied = "${list.size} properti disalin"
-            }, Modifier.weight(1f), enabled = props != null)
-        }
-        copied?.let { Caption(it) }
-    }
-    val list = props?.filter { q.isBlank() || it.first.contains(q, true) || it.second.contains(q, true) }
-    if (list == null) Spinner("Membaca properti…") else {
-        Caption("${list.size} dari ${props?.size ?: 0} properti")
-        LimitedList(list, 60) { (k, v) ->
-            Column(Modifier.fillMaxWidth().clickableNoRipple {
-                copyText(ctx, k, "$k=$v"); copied = "Disalin: $k"
-            }) {
-                Mono(k, size = 11)
-                Caption(v.ifBlank { "(kosong)" })
-            }
         }
     }
 }

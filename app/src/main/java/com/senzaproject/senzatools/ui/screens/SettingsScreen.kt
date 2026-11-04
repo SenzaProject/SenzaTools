@@ -48,13 +48,6 @@ fun SettingsScreen(s: ServiceLocator, onBack: () -> Unit = {}) {
             GlassButton(Lang.displayName(), { showLang = true }, Modifier.fillMaxWidth())
             Caption("Tema")
             ChipRow(listOf("Ikuti sistem", "Terang", "Gelap"), s.uiPrefs.themeMode) { s.uiPrefs.setThemeMode(it) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Body("Kurangi efek visual")
-                    Caption("Matikan efek kaca cair di bar navigasi untuk hemat baterai.")
-                }
-                Chip(if (s.uiPrefs.reducedEffects) "Aktif" else "Nonaktif", s.uiPrefs.reducedEffects) { s.uiPrefs.setReducedEffects(!s.uiPrefs.reducedEffects) }
-            }
         }
         if (showLang) LanguageDialog { showLang = false }
 

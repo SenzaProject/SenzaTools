@@ -91,7 +91,7 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
         "Senza Tools", "Intelligent Android. Smarter System Control.",
         action = {
             IconButton(onClick = { go(Dest.SETTINGS) }) {
-                Icon(Icons.Rounded.Settings, "Settings", tint = g.textDim, modifier = Modifier.size(24.dp))
+                Icon(Icons.Rounded.Settings, "Settings", tint = g.textDim, modifier = Modifier.size(22.dp))
             }
         }
     ) {
@@ -108,10 +108,10 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                 Spinner("Membaca data perangkat…")
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    RingGauge(d.cpu.usagePercent, "CPU", size = 80.dp)
-                    RingGauge(d.mem.percent, "RAM", size = 80.dp)
-                    RingGauge(d.bat.percent.toFloat(), "Baterai", size = 80.dp)
-                    RingGauge(d.sto.percent, "Storage", size = 80.dp)
+                    RingGauge(d.cpu.usagePercent, "CPU", size = 64.dp)
+                    RingGauge(d.mem.percent, "RAM", size = 64.dp)
+                    RingGauge(d.bat.percent.toFloat(), "Baterai", size = 64.dp)
+                    RingGauge(d.sto.percent, "Storage", size = 64.dp)
                 }
                 GlassDivider()
                 val hp = health?.primary
@@ -144,15 +144,15 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
             Heading("Diagnostik")
             val rep = s.session.lastDiagnostic
             if (rep == null) {
-                Caption("Pemeriksaan lokal tanpa internet. Hasil: masalah, bukti, dan rekomendasi.")
+                Caption("Pemeriksaan lokal tanpa internet.")
             } else {
-                rep.findings.take(3).forEach { f ->
+                rep.findings.take(5).forEach { f ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         SeverityPill(f.severity)
                         Body(f.title, Modifier.weight(1f), maxLines = 2)
                     }
                 }
-                if (rep.findings.size > 3) Caption("+${rep.findings.size - 3} temuan lain di Toolkit.")
+                if (rep.findings.size > 5) Caption("+${rep.findings.size - 5} temuan lain.")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton(if (diagBusy) "Memeriksa…" else "Jalankan", {
@@ -162,7 +162,6 @@ fun HomeScreen(s: ServiceLocator, go: (Dest) -> Unit) {
                         diagBusy = false
                     }
                 }, primary = true, enabled = !diagBusy)
-                GlassButton("Detail", { go(Dest.TOOLKIT) })
             }
         }
     }
