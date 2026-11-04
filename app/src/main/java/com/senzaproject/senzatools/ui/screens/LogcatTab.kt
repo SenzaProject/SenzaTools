@@ -15,6 +15,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.senzaproject.senzatools.di.ServiceLocator
+import com.senzaproject.senzatools.platform.root.LogDump
+import com.senzaproject.senzatools.platform.root.LogLevel
+import com.senzaproject.senzatools.platform.root.LogParse
+import com.senzaproject.senzatools.platform.root.LogSource
 import com.senzaproject.senzatools.platform.root.LogTools
 import com.senzaproject.senzatools.ui.components.*
 import com.senzaproject.senzatools.ui.theme.LocalGlass
@@ -30,13 +34,13 @@ fun LogcatTab(s: ServiceLocator) {
     val scope = rememberCoroutineScope()
     val rootOk = s.access.state.collectAsState().let { s.access.isRootVerified }
 
-    val sources = LogTools.Source.values()
-    val levels = LogTools.Level.values()
+    val sources = LogSource.values()
+    val levels = LogLevel.values()
     var src by remember { mutableStateOf(0) }
     var level by remember { mutableStateOf(0) }
     var countIdx by remember { mutableStateOf(1) }
     var keyword by remember { mutableStateOf("") }
-    var lines by remember { mutableStateOf<List<String>?>(null) }
+    var dump by remember { mutableStateOf<LogDump?>(null) }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var msgOk by remember { mutableStateOf(true) }
@@ -46,7 +50,7 @@ fun LogcatTab(s: ServiceLocator) {
         Heading("Log sistem")
         Caption("Ambil log untuk debug ROM. Butuh root agar log seluruh sistem terbaca.")
         ChipRow(sources.map { it.label }, src) { src = it }
-        if (sources[src] == LogTools.Source.LOGCAT) ChipRow(levels.map { it.label }, level) { level = it }
+        if (sources[src] == LogSource.LOGCAT) ChipRow(levels.map { it.label }, level) { level = it }
         Caption("Jumlah baris terakhir")
         ChipRow(LogTools.COUNTS.map { it.toString() }, countIdx) { countIdx = it }
         GlassTextField(keyword, { keyword = it }, "Filter kata kunci (opsional)")
@@ -56,7 +60,7 @@ fun LogcatTab(s: ServiceLocator) {
                 scope.launch {
                     busy = true; msg = null
                     val d = t.read(sources[src], levels[level], LogTools.COUNTS[countIdx])
-                    if (d.ok) lines = d.lines else { lines = null; msg = d.message; msgOk = false }
+                    if (d.ok) dump = d else { dump = null; msg = d.message; msgOk = false }
                     busy = false
                 }
             }, Modifier.weight(1f), primary = true, enabled = rootOk && !busy)
@@ -73,16 +77,19 @@ fun LogcatTab(s: ServiceLocator) {
         Caption("Paket log berisi logcat, crash, dmesg, dan getprop dalam satu folder bertanggal di Download/SenzaTools/logs. Praktis untuk laporan bug.")
     }
 
-    lines?.let { all ->
-        val shown = remember(all, keyword) { LogTools.filter(all, keyword).takeLast(MAX_SHOWN) }
+    dump?.let { snap ->
+        val all = snap.lines
+        val matched = remember(all, keyword) { LogTools.filter(all, keyword) }
+        val shown = remember(matched) { matched.takeLast(MAX_SHOWN) }
         GlassCard {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Heading("Hasil")
                 Caption("${shown.size} dari ${all.size} baris")
             }
-            GlassButton("Salin", { copyText(ctx, "log", shown.joinToString("\n").takeLast(60_000)) }, Modifier.fillMaxWidth(), enabled = shown.isNotEmpty())
+            Caption("Snapshot ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(snap.capturedAt))} · sidik jari ${snap.fingerprint} · ${snap.total} baris cocok di buffer. Isi buffer yang sama selalu memberi sidik jari yang sama.")
+            GlassButton("Salin", { copyText(ctx, "log", LogParse.joinTail(matched, 400_000)) }, Modifier.fillMaxWidth(), enabled = matched.isNotEmpty())
             SelectionContainer { Mono(shown.joinToString("\n").ifBlank { "(tidak ada baris yang cocok)" }, size = 10) }
-            if (all.size > shown.size && keyword.isBlank()) Caption("Menampilkan $MAX_SHOWN baris terakhir. Gunakan Simpan paket log untuk log lengkap.")
+            if (matched.size > shown.size) Caption("Layar menampilkan $MAX_SHOWN baris terakhir dari ${matched.size}. Tombol Salin menyalin semua ${matched.size} baris.")
         }
     }
 
@@ -95,7 +102,7 @@ fun LogcatTab(s: ServiceLocator) {
             scope.launch {
                 busy = true
                 val r = t.clearBuffers()
-                msg = r.message; msgOk = r.ok; lines = null; busy = false
+                msg = r.message; msgOk = r.ok; dump = null; busy = false
             }
         },
         onDismiss = { confirmClear = false }

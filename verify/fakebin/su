@@ -1,0 +1,3 @@
+#!/bin/sh
+[ "$1" = "-c" ] && shift
+exec sh -c "$1"

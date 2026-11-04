@@ -169,6 +169,23 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
     }
 
     /**
+     * Perintah root yang disusun aplikasi sendiri, dibaca baris demi baris ([Sys.stream]). Blocking: panggil dari thread IO.
+     * Tidak ada pemotongan kepala keluaran dan tidak ada stderr yang tercampur; hasil menyatakan sendiri apakah lengkap.
+     */
+    fun runRootStream(
+        command: String,
+        label: String,
+        timeoutMs: Long = 30_000,
+        tail: Int = Int.MAX_VALUE,
+        keep: (String) -> Boolean = { true }
+    ): com.senzaproject.senzatools.utils.StreamResult {
+        if (!rootVerified) return com.senzaproject.senzatools.utils.StreamResult(-1, emptyList(), 0, "Akses root belum diverifikasi.", false, false)
+        val r = Sys.stream(listOf("su", "-c", command), timeoutMs, tail, keep)
+        log.add("ROOT", "$label: ${command.take(200)}", if (r.ok) "ok" else "exit=${r.exitCode}")
+        return r
+    }
+
+    /**
      * Restart perangkat lewat rantai beberapa metode ([RootPower]). Kembali segera setelah perintah dikirim;
      * bila perangkat benar-benar restart, proses aplikasi mati sebelum pemanggil sempat melakukan apa pun.
      */

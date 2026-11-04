@@ -528,16 +528,16 @@ private fun SelinuxTab(s: ServiceLocator, vm: AnalyzerViewModel) {
                 GlassButton("dmesg (root)", {
                     scope.launch {
                         busy = true
-                        val r = s.access.run(SafeAction.Dmesg, true)
-                        vm.analyzeAvcText("dmesg (root)", r.output)
+                        val (text, note) = s.selinux.captureAvcText("dmesg")
+                        if (text != null) vm.analyzeAvcText("dmesg (root) · ${note.note}", text) else vm.reportAvcError("dmesg: ${note.note}")
                         busy = false
                     }
                 }, Modifier.weight(1f), enabled = !busy)
                 GlassButton("logcat (root)", {
                     scope.launch {
                         busy = true
-                        val r = s.access.run(SafeAction.Logcat, true)
-                        vm.analyzeAvcText("logcat (root)", r.output)
+                        val (text, note) = s.selinux.captureAvcText("logcat")
+                        if (text != null) vm.analyzeAvcText("logcat (root) · ${note.note}", text) else vm.reportAvcError("logcat: ${note.note}")
                         busy = false
                     }
                 }, Modifier.weight(1f), enabled = !busy)

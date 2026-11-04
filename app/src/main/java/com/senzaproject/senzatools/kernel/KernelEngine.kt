@@ -49,8 +49,10 @@ class KernelEngine(private val ctx: Context, private val access: AccessManager, 
         val platform = Sys.prop("ro.board.platform")
         val soc = KernelRules.detectSoc(Sys.prop("ro.soc.manufacturer"), platform, Sys.prop("ro.hardware"))
         val kernel = KernelVersion.parse(Sys.readText("/proc/version"))
-        val selinux = Sys.readText("/sys/fs/selinux/enforce")?.let { if (it == "1") "Enforcing" else "Permissive" }
-            ?: Sys.sh("getenforce", 3000).output.trim().ifEmpty { "Tidak diketahui" }
+        val selinux = com.senzaproject.senzatools.platform.root.SelinuxMode.parse(Sys.readText("/sys/fs/selinux/enforce"))
+            ?: Sys.stream(listOf("sh", "-c", "getenforce"), 3000).takeIf { it.ok }
+                ?.let { com.senzaproject.senzatools.platform.root.SelinuxMode.parse(it.lines.joinToString("\n")) }
+            ?: "Tidak diketahui"
         val ramKb = Sys.readText("/proc/meminfo")?.lineSequence()?.firstOrNull { it.startsWith("MemTotal:") }
             ?.filter { it.isDigit() }?.toLongOrNull()
         DeviceProfile(Build.VERSION.SDK_INT, kernel, soc, platform, selinux, ramKb?.div(1024))

@@ -128,9 +128,9 @@ class DeviceRepository(private val ctx: Context) {
     }
 
     fun selinuxMode(): String {
-        Sys.readText("/sys/fs/selinux/enforce")?.let { return if (it == "1") "Enforcing" else "Permissive" }
-        val r = Sys.execute(listOf("getenforce"), 3000)
-        return if (r.ok && r.output.isNotBlank()) r.output.trim() else na
+        com.senzaproject.senzatools.platform.root.SelinuxMode.parse(Sys.readText("/sys/fs/selinux/enforce"))?.let { return it }
+        val r = Sys.stream(listOf("getenforce"), 3000)
+        return (if (r.ok) com.senzaproject.senzatools.platform.root.SelinuxMode.parse(r.lines.joinToString("\n")) else null) ?: na
     }
 
     // ---------------------------------------------------------------- CPU

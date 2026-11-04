@@ -11,6 +11,23 @@ data class ShellResult(val exitCode: Int, val output: String, val timedOut: Bool
     val ok: Boolean get() = exitCode == 0 && !timedOut
 }
 
+/**
+ * Hasil pembacaan keluaran proses baris demi baris ([Sys.stream]).
+ * [lines] hanya baris yang lolos penyaring dan hanya [tail] terakhir; [total] = jumlah baris yang lolos penyaring
+ * sebelum dipotong. [complete] true hanya bila proses selesai sendiri dan seluruh keluarannya terbaca habis:
+ * hasil yang tidak lengkap TIDAK boleh disajikan sebagai hasil akurat.
+ */
+class StreamResult(
+    val exitCode: Int,
+    val lines: List<String>,
+    val total: Long,
+    val stderr: String,
+    val timedOut: Boolean,
+    val complete: Boolean
+) {
+    val ok: Boolean get() = complete && !timedOut && exitCode == 0
+}
+
 /** Akses sistem level Normal: membaca file sysfs/procfs yang boleh dibaca aplikasi dan menjalankan getprop. */
 object Sys {
     private val PROP_RE = Regex("""^\[(.*?)]: \[(.*)]$""")
@@ -69,6 +86,75 @@ object Sys {
             ShellResult(if (finished) p.exitValue() else -1, text, !finished)
         } catch (e: Throwable) {
             ShellResult(-1, e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Menjalankan proses dan membaca stdout baris demi baris (stderr dibaca terpisah, TIDAK dicampur ke log).
+     * Berbeda dari [execute]: tidak ada batas karakter yang memotong bagian paling baru, memori dibatasi lewat
+     * [tail] (cincin baris terakhir), dan seluruh keluaran dipastikan terbaca habis sebelum hasil dilaporkan.
+     */
+    fun stream(
+        args: List<String>,
+        timeoutMs: Long = 30_000,
+        tail: Int = Int.MAX_VALUE,
+        keep: (String) -> Boolean = { true }
+    ): StreamResult {
+        return try {
+            val p = ProcessBuilder(args).redirectErrorStream(false).start()
+            runCatching { p.outputStream.close() }
+            val lock = Any()
+            val ring = java.util.ArrayDeque<String>()
+            var total = 0L
+            val err = StringBuilder()
+            val outT = Thread {
+                try {
+                    p.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                        while (true) {
+                            val line = r.readLine() ?: break
+                            if (!keep(line)) continue
+                            synchronized(lock) {
+                                total++
+                                ring.addLast(line)
+                                if (ring.size > tail) ring.removeFirst()
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            val errT = Thread {
+                try {
+                    p.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                        val buf = CharArray(1024)
+                        while (true) {
+                            val n = r.read(buf)
+                            if (n < 0) break
+                            synchronized(lock) { if (err.length < 4000) err.append(buf, 0, n) }
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            outT.start(); errT.start()
+            val finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) p.destroyForcibly()
+            // Setelah proses selesai, pipa pasti ditutup; tunggu pembaca sampai habis, bukan menebak 1,5 detik.
+            outT.join(10_000)
+            errT.join(2_000)
+            val drained = !outT.isAlive
+            synchronized(lock) {
+                StreamResult(
+                    exitCode = if (finished) p.exitValue() else -1,
+                    lines = ring.toList(),
+                    total = total,
+                    stderr = err.toString().trim(),
+                    timedOut = !finished,
+                    complete = finished && drained
+                )
+            }
+        } catch (e: Throwable) {
+            StreamResult(-1, emptyList(), 0, e.message ?: e.javaClass.simpleName, false, false)
         }
     }
 

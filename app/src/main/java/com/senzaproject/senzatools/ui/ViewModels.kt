@@ -290,7 +290,12 @@ class AnalyzerViewModel(private val s: ServiceLocator) : ViewModel() {
         }
     }
 
+    fun reportAvcError(message: String) {
+        miscError = message
+    }
+
     fun analyzeAvcText(source: String, text: String) {
+        miscError = null
         s.session.lastLog = text.takeLast(60_000)
         avc = AvcState(source, SelinuxAnalyzer.parse(text))
     }

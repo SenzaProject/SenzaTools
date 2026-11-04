@@ -16,9 +16,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.senzaproject.senzatools.analyzer.system.AvcDenial
+import com.senzaproject.senzatools.platform.root.ModeStatus
 import com.senzaproject.senzatools.analyzer.system.SelinuxAnalyzer
 import com.senzaproject.senzatools.di.ServiceLocator
-import com.senzaproject.senzatools.platform.root.SafeAction
 import com.senzaproject.senzatools.ui.components.*
 import com.senzaproject.senzatools.ui.theme.LocalGlass
 import kotlinx.coroutines.launch
@@ -33,7 +33,8 @@ fun SelinuxControlTab(s: ServiceLocator) {
     val scope = rememberCoroutineScope()
     val rootOk = s.access.state.collectAsState().let { s.access.isRootVerified }
 
-    var mode by remember { mutableStateOf<String?>(null) }
+    var modeStatus by remember { mutableStateOf<ModeStatus?>(null) }
+    val mode = modeStatus?.mode
     var loaded by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
@@ -42,7 +43,7 @@ fun SelinuxControlTab(s: ServiceLocator) {
     var denials by remember { mutableStateOf<List<AvcDenial>?>(null) }
     var scanNote by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(rootOk) { mode = c.status(); loaded = true }
+    LaunchedEffect(rootOk) { modeStatus = c.statusDetail(); loaded = true }
 
     GlassCard(strong = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -60,29 +61,27 @@ fun SelinuxControlTab(s: ServiceLocator) {
             GlassButton("Enforcing", { confirm = false }, Modifier.weight(1f), primary = true, enabled = rootOk && !busy && mode == "Permissive")
         }
         GlassButton("Muat ulang status", {
-            scope.launch { busy = true; mode = c.status(); busy = false }
+            scope.launch { busy = true; modeStatus = c.statusDetail(); busy = false }
         }, Modifier.fillMaxWidth(), enabled = !busy)
         msg?.let { Body(it, color = if (msgOk) g.good else g.bad) }
+        modeStatus?.let { st -> if (st.conflict || st.mode == null) Caption(st.describe(), color = g.warn) else Caption(st.describe()) }
         Caption("Permissive hanya mencatat pelanggaran tanpa memblokir, jadi berguna untuk mencari penyebab bug di ROM port. Perubahan bersifat sementara dan hilang saat restart.")
     }
 
     GlassCard {
         Heading("Denial terbaru")
-        Caption("Mengambil baris avc: denied dari log kernel (dmesg), lalu logcat bila kosong. Analisis lengkap ada di Analyzer → SELinux.")
+        Caption("Membaca seluruh dmesg dan seluruh buffer logcat, lalu menggabungkannya tanpa hitung ganda (id audit yang sama dihitung sekali). Analisis lengkap ada di Analyzer → SELinux.")
         GlassButton(if (busy) "Memindai…" else "Pindai denial", {
             scope.launch {
                 busy = true; scanNote = null
-                var r = s.access.run(SafeAction.Dmesg, true)
-                var found = SelinuxAnalyzer.parse(r.output)
-                var from = "dmesg"
-                if (found.isEmpty()) {
-                    r = s.access.run(SafeAction.Logcat, true)
-                    found = SelinuxAnalyzer.parse(r.output)
-                    from = "logcat"
+                val scan = c.scanDenials()
+                denials = scan.denials
+                val src = scan.sources.joinToString(" · ") { "${it.name}: ${it.note}" }
+                scanNote = when {
+                    scan.denials.isEmpty() && !scan.complete -> "Belum bisa disimpulkan: ada sumber yang gagal atau terpotong ($src)."
+                    scan.denials.isEmpty() -> "Tidak ada denial di buffer saat ini ($src). Log mungkin sudah bergulir; coba reproduksi bug lalu pindai lagi."
+                    else -> "${scan.denials.size} kelompok, ${scan.totalEvents} kejadian (menampilkan $TOP teratas) · sidik jari ${scan.fingerprint} · $src"
                 }
-                denials = found
-                scanNote = if (found.isEmpty()) "Tidak ada denial ditemukan. Log mungkin sudah bergulir; coba reproduksi bug lalu pindai lagi."
-                else "${found.size} kelompok denial dari $from (menampilkan $TOP teratas)."
                 busy = false
             }
         }, Modifier.fillMaxWidth(), primary = true, enabled = rootOk && !busy)
@@ -123,7 +122,7 @@ fun SelinuxControlTab(s: ServiceLocator) {
                     busy = true; msg = null
                     val r = c.setPermissive(toPermissive)
                     msg = r.message; msgOk = r.ok
-                    mode = c.status(); busy = false
+                    modeStatus = c.statusDetail(); busy = false
                 }
             },
             onDismiss = { confirm = null }
