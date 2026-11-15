@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Flash Tool: komunikasi USB langsung ke device target di mode BROM/Preloader (OTG) -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <!-- Deteksi root manager / Shizuku tanpa QUERY_ALL_PACKAGES -->
     <queries>
         <package android:name="com.topjohnwu.magisk" />
@@ -43,6 +46,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Flash Tool: biar Android tahu app ini relevan saat device target di mode BROM dicolok -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter_brom" />
         </activity>
 
         <!-- Memasang ulang hasil edit file (bind-mount) dan properti setelah boot, tanpa module Magisk. -->

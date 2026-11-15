@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MediaTek VID 0x0E8D = 3725 desimal. PID yang dikenal untuk mode Preloader/BROM. -->
+<resources>
+    <usb-device vendor-id="3725" product-id="3" />      <!-- 0x0003 Preloader -->
+    <usb-device vendor-id="3725" product-id="8192" />   <!-- 0x2000 BROM -->
+    <usb-device vendor-id="3725" product-id="8193" />   <!-- 0x2001 BROM varian -->
+    <usb-device vendor-id="3725" product-id="8221" />   <!-- 0x201D BROM varian baru -->
+</resources>
