@@ -15,9 +15,9 @@ import com.senzaproject.senzatools.ui.components.*
 import com.senzaproject.senzatools.ui.theme.LocalGlass
 
 /**
- * Flash Tool — Tahap 1: deteksi USB device MediaTek BROM/Preloader + identifikasi chip.
- * BELUM mengirim DA, BELUM flashing partisi apa pun (itu Tahap 2 ke atas).
- * Lihat komentar di BromProtocol.kt / FlashToolEngine.kt untuk batasan yang sudah diketahui.
+ * Flash Tool — Tahap 1 (deteksi USB + identifikasi chip BROM), Tahap 2 (kirim & jalankan DA1),
+ * Tahap 3 (buka kanal command XFlash + minta versi DA). BELUM flashing partisi apa pun.
+ * Lihat komentar di BromProtocol.kt / XFlashProtocol.kt / FlashToolEngine.kt untuk batasan yang diketahui.
  */
 @Composable
 fun FlashToolTab(s: ServiceLocator) {
@@ -44,11 +44,13 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.DA_MATCHED -> "DA cocok"
                     FlashStage.DA_SENDING -> "Mengirim DA…"
                     FlashStage.DA_READY -> "DA siap"
+                    FlashStage.XFLASH_SYNCING -> "Buka kanal XFlash…"
+                    FlashStage.XFLASH_READY -> "Kanal XFlash siap"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -87,7 +89,8 @@ fun FlashToolTab(s: ServiceLocator) {
         }
         st.deviceName?.let { KeyValue("USB device", it) }
         when (st.stage) {
-            FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING, FlashStage.DA_READY -> {
+            FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING,
+            FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -103,9 +106,11 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
-    if (st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
-        st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING || st.stage == FlashStage.DA_READY
-    ) {
+    val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
+        st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
+        st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY
+
+    if (tahap2Visible) {
         GlassCard {
             Heading("Tahap 2 — Kirim & jalankan DA")
             Body("Pilih file DA (Download Agent) yang sudah kamu siapkan untuk chipset ini.", dim = true)
@@ -115,12 +120,11 @@ fun FlashToolTab(s: ServiceLocator) {
                     { daPicker.launch(arrayOf("*/*")) },
                     enabled = st.stage != FlashStage.DA_PARSING && st.stage != FlashStage.DA_SENDING
                 )
-                if (st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_READY) {
+                if (st.stage == FlashStage.DA_MATCHED) {
                     GlassButton(
                         "Kirim & Jalankan DA",
                         { s.flashTool.sendAndRunDa() },
-                        primary = true,
-                        enabled = st.stage == FlashStage.DA_MATCHED
+                        primary = true
                     )
                 }
             }
@@ -128,8 +132,29 @@ fun FlashToolTab(s: ServiceLocator) {
                 Caption("Hasil pencocokan file DA:")
                 Mono(it)
             }
-            if (st.stage == FlashStage.DA_READY) {
-                Body("DA sudah hidup dan siap. Belum ada perintah baca/tulis partisi apa pun di tahap ini.", color = g.good)
+            if (st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY) {
+                Body("DA sudah hidup dan siap. SEND_DA/JUMP_DA tidak menyentuh penyimpanan permanen.", color = g.good)
+            }
+        }
+    }
+
+    if (st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY) {
+        GlassCard {
+            Heading("Tahap 3 — Buka kanal command XFlash")
+            Body(
+                "Minta versi DA lewat kanal command XFlash sebagai bukti komunikasi dua arah jalan. " +
+                    "Belum baca partition table, belum upload DA2 — itu baru menyusul setelah ini terbukti jalan.",
+                dim = true
+            )
+            GlassButton(
+                if (st.stage == FlashStage.XFLASH_SYNCING) "Membuka kanal…" else "Buka Kanal & Minta Versi DA",
+                { s.flashTool.xflashHandshake() },
+                primary = true,
+                enabled = st.stage != FlashStage.XFLASH_SYNCING
+            )
+            if (st.stage == FlashStage.XFLASH_READY) {
+                Caption("Kanal XFlash terbuka:")
+                Mono(st.info ?: "-")
             }
         }
     }
@@ -137,8 +162,9 @@ fun FlashToolTab(s: ServiceLocator) {
     GlassCard {
         Heading("Status fitur ke depan")
         Body(
-            "• Tahap 3: baca scatter/partition table dari device lewat DA — belum dibuat\n" +
-                "• Tahap 4: flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
+            "• Upload DA2 + kalibrasi DRAM/EMI (perlu sebelum baca info storage) — belum dibuat\n" +
+                "• Baca scatter/partition table dari device lewat DA2 — belum dibuat\n" +
+                "• Flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
                 "• Flash ROM penuh dari apk + wipe + auto-restart + fallback recovery: belum dibuat\n" +
                 "Semua akan ditambahkan bertahap setelah tahap ini terbukti jalan di device aslimu.",
             dim = true

@@ -32,7 +32,7 @@ private const val MTK_VID = 0x0E8D
 
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
-    DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, ERROR
+    DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY, ERROR
 }
 
 data class FlashToolState(
@@ -295,6 +295,47 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                     }
                     is BromProtocol.DaResult.Error -> {
                         log.add("FlashTool", "Kirim+jalankan DA", "ERROR[${result.stage}]: ${result.message}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.ERROR,
+                            errorStage = result.stage,
+                            errorMessage = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** Tahap 3 (revisi): buka kanal command XFlash + minta versi DA. Belum baca partisi, belum upload DA2. */
+    fun xflashHandshake() {
+        val sess = session
+        if (sess == null || _state.value.stage != FlashStage.DA_READY) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "xflash_not_ready",
+                errorMessage = "DA belum dalam keadaan siap (DA_READY). Selesaikan Tahap 2 dulu."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.XFLASH_SYNCING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val result = try {
+                XFlashProtocol.handshakeAndGetVersion(sess.conn, sess.intf)
+            } catch (t: Throwable) {
+                XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+            }
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is XFlashProtocol.XResult.Ok -> {
+                        val hex = result.raw.joinToString(" ") { "%02x".format(it) }
+                        log.add("FlashTool", "XFlash handshake", "OK: raw=$hex")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.XFLASH_READY,
+                            info = "Kanal XFlash terbuka. Balasan GET_DA_VERSION (raw hex): $hex"
+                        )
+                    }
+                    is XFlashProtocol.XResult.Error -> {
+                        log.add("FlashTool", "XFlash handshake", "ERROR[${result.stage}]: ${result.message}")
                         _state.value = _state.value.copy(
                             stage = FlashStage.ERROR,
                             errorStage = result.stage,
