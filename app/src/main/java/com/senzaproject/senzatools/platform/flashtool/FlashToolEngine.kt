@@ -6,7 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import com.senzaproject.senzatools.data.OperationLog
 import kotlinx.coroutines.CoroutineScope
@@ -27,20 +30,27 @@ import kotlinx.coroutines.withContext
 private val KNOWN_MTK_PIDS = setOf(0x0003, 0x2000, 0x2001, 0x201D)
 private const val MTK_VID = 0x0E8D
 
-enum class FlashStage { IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED, ERROR }
+enum class FlashStage {
+    IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
+    DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, ERROR
+}
 
 data class FlashToolState(
     val stage: FlashStage = FlashStage.IDLE,
     val deviceName: String? = null,
     val info: String? = null,
+    val hwCode: Int? = null,
+    val daSummary: String? = null,
     val errorStage: String? = null,
     val errorMessage: String? = null
 )
 
 /**
- * Tahap 1 Flash Tool: deteksi USB device MediaTek BROM/Preloader + identifikasi chip.
- * BELUM mengirim DA, BELUM melakukan flashing. Lihat BromProtocol.kt untuk detail protokol
- * dan batasan yang sudah diketahui.
+ * Flash Tool — Tahap 1 (deteksi USB + identifikasi chip lewat BROM) dan Tahap 2
+ * (parse file DA, cocokkan dengan chip yang teridentifikasi, kirim DA1 lalu jalankan).
+ * Koneksi USB disimpan terbuka selama satu sesi BROM supaya Tahap 2 bisa lanjut dari hasil
+ * identifikasi Tahap 1 tanpa buka-tutup koneksi (yang berisiko membuat BROM melepas sesi).
+ * Lihat BromProtocol.kt / DaFile.kt untuk detail protokol, asumsi, dan batasannya.
  */
 class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
@@ -52,6 +62,18 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
     private val actionUsbPermission = "${ctx.packageName}.USB_PERMISSION_FLASHTOOL"
     private var receiverRegistered = false
+
+    // Sesi BROM yang sedang aktif (null kalau belum ada device teridentifikasi).
+    private var session: Session? = null
+
+    private class Session(
+        val device: UsbDevice,
+        val conn: UsbDeviceConnection,
+        val intf: UsbInterface,
+        val hwCode: Int,
+        var daEntries: List<DaFile.DaEntry> = emptyList(),
+        var matchedEntry: DaFile.DaEntry? = null
+    )
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -84,6 +106,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         receiverRegistered = true
     }
 
+    /** Dipanggil saat tab Flash Tool ditutup. Tidak menutup sesi BROM yang masih aktif secara otomatis. */
     fun dispose() {
         if (receiverRegistered) {
             try { ctx.unregisterReceiver(permissionReceiver) } catch (_: Throwable) {}
@@ -91,8 +114,14 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
+    private fun closeSession() {
+        session?.let { try { it.conn.close() } catch (_: Throwable) {} }
+        session = null
+    }
+
     /** Pindai USB host yang tersambung sekarang dan cari device yang cocok pola MediaTek BROM/Preloader. */
     fun scanAndConnect() {
+        closeSession()
         _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE)
         val candidates = usbManager.deviceList.values.filter { it.vendorId == MTK_VID }
         if (candidates.isEmpty()) {
@@ -127,15 +156,14 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     private fun runHandshake(device: UsbDevice) {
         _state.value = FlashToolState(stage = FlashStage.HANDSHAKING, deviceName = device.deviceName)
         scope.launch {
+            val conn = usbManager.openDevice(device)
+            if (conn == null) {
+                postError(device.deviceName, "open_device", "Gagal membuka koneksi USB ke device (openDevice null).")
+                return@launch
+            }
+            val intf = device.getInterface(0)
             val result = try {
-                val conn = usbManager.openDevice(device)
-                    ?: return@launch postError(device.deviceName, "open_device", "Gagal membuka koneksi USB ke device (openDevice null).")
-                val intf = device.getInterface(0)
-                try {
-                    BromProtocol.identify(conn, intf)
-                } finally {
-                    conn.close()
-                }
+                BromProtocol.identify(conn, intf)
             } catch (t: Throwable) {
                 BromProtocol.BromResult.Error("exception", t.message ?: t.toString())
             }
@@ -145,17 +173,130 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                         val msg = "HW code: 0x${result.hwCode.toString(16)} | HW sub-code: 0x${result.hwSubCode.toString(16)} | " +
                             "HW ver: 0x${result.hwVersion.toString(16)} | SW ver: 0x${result.swVersion.toString(16)}"
                         log.add("FlashTool", "BROM identify ${device.deviceName}", "OK: $msg")
+                        session = Session(device, conn, intf, result.hwCode)
                         _state.value = FlashToolState(
                             stage = FlashStage.IDENTIFIED,
                             deviceName = device.deviceName,
-                            info = msg
+                            info = msg,
+                            hwCode = result.hwCode
                         )
                     }
                     is BromProtocol.BromResult.Error -> {
                         log.add("FlashTool", "BROM identify ${device.deviceName}", "ERROR[${result.stage}]: ${result.message}")
+                        try { conn.close() } catch (_: Throwable) {}
                         _state.value = FlashToolState(
                             stage = FlashStage.ERROR,
                             deviceName = device.deviceName,
+                            errorStage = result.stage,
+                            errorMessage = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Baca & parse file DA yang dipilih pengguna (SAF), cocokkan dengan HW code device yang
+     * sudah teridentifikasi di sesi ini. Tidak mengirim apa pun ke device di langkah ini.
+     */
+    fun pickDaFile(uri: Uri) {
+        val sess = session
+        if (sess == null) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "da_no_session",
+                errorMessage = "Belum ada device yang teridentifikasi. Lakukan \"Pindai & Deteksi\" dulu sebelum memilih file DA."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (t: Throwable) {
+                null
+            }
+            if (bytes == null) {
+                postDaError(sess, "da_read", "Gagal membaca file DA yang dipilih (izin akses file atau file tidak valid).")
+                return@launch
+            }
+            when (val parsed = DaFile.parse(bytes)) {
+                is DaFile.ParseResult.Error -> postDaError(sess, "da_parse", parsed.message)
+                is DaFile.ParseResult.Ok -> {
+                    val match = parsed.entries.firstOrNull { it.hwCode == sess.hwCode }
+                    if (match == null) {
+                        val available = parsed.entries.joinToString(", ") { "0x${it.hwCode.toString(16)}" }
+                        postDaError(
+                            sess, "da_no_match",
+                            "File DA ini (\"${parsed.daId}\") tidak punya entri untuk HW code device kamu " +
+                                "(0x${sess.hwCode.toString(16)}). Chip yang didukung file ini: $available. " +
+                                "Pastikan file DA memang untuk chipset Infinix Hot 50 4G kamu."
+                        )
+                        return@launch
+                    }
+                    val da1 = DaFile.da1Of(match)
+                    if (da1 == null) {
+                        postDaError(sess, "da_no_region", "Entri DA untuk chip ini ketemu, tapi tidak punya region DA1 yang bisa dibaca.")
+                        return@launch
+                    }
+                    sess.daEntries = parsed.entries
+                    sess.matchedEntry = match
+                    val summary = "DA cocok untuk HW code 0x${sess.hwCode.toString(16)} | " +
+                        "DA1 @ 0x${da1.loadAddress.toString(16)}, panjang 0x${da1.totalLength.toString(16)} " +
+                        "(sig 0x${da1.sigLength.toString(16)})"
+                    withContext(Dispatchers.Main) {
+                        log.add("FlashTool", "Parse DA", "OK: $summary")
+                        _state.value = _state.value.copy(stage = FlashStage.DA_MATCHED, daSummary = summary)
+                    }
+                    pendingDaBytes = bytes
+                }
+            }
+        }
+    }
+
+    @Volatile private var pendingDaBytes: ByteArray? = null
+
+    /** Kirim DA1 yang sudah cocok ke device, lalu JUMP_DA, lalu tunggu konfirmasi DA hidup (byte 0xC0). */
+    fun sendAndRunDa() {
+        val sess = session
+        val entry = sess?.matchedEntry
+        val daBytes = pendingDaBytes
+        if (sess == null || entry == null || daBytes == null) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "da_not_ready",
+                errorMessage = "Belum ada file DA yang cocok dan terpilih untuk dikirim."
+            )
+            return
+        }
+        val region = DaFile.da1Of(entry)!!
+        _state.value = _state.value.copy(stage = FlashStage.DA_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val fileEnd = minOf(region.fileOffset + region.totalLength, daBytes.size)
+            if (region.fileOffset < 0 || region.fileOffset >= daBytes.size || fileEnd <= region.fileOffset) {
+                postDaError(sess, "da_region_bounds", "Region DA1 di luar batas file DA (offset/panjang tidak valid).")
+                return@launch
+            }
+            val payload = daBytes.copyOfRange(region.fileOffset, fileEnd)
+            val result = try {
+                BromProtocol.sendAndRunDa(sess.conn, sess.intf, payload, region)
+            } catch (t: Throwable) {
+                BromProtocol.DaResult.Error("exception", t.message ?: t.toString())
+            }
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is BromProtocol.DaResult.Ready -> {
+                        log.add("FlashTool", "Kirim+jalankan DA", "OK: DA mengirim sync 0x${result.syncByte.toString(16)}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.DA_READY,
+                            info = "DA siap (sync byte: 0x${result.syncByte.toString(16)}). Belum ada flashing — ini baru konfirmasi DA hidup."
+                        )
+                    }
+                    is BromProtocol.DaResult.Error -> {
+                        log.add("FlashTool", "Kirim+jalankan DA", "ERROR[${result.stage}]: ${result.message}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.ERROR,
                             errorStage = result.stage,
                             errorMessage = result.message
                         )
@@ -172,7 +313,23 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
+    private suspend fun postDaError(sess: Session, stage: String, message: String) {
+        withContext(Dispatchers.Main) {
+            log.add("FlashTool", "DA", "ERROR[$stage]: $message")
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                deviceName = sess.device.deviceName,
+                hwCode = sess.hwCode,
+                errorStage = stage,
+                errorMessage = message
+            )
+        }
+    }
+
+    /** Reset total: tutup sesi USB yang masih terbuka dan kembali ke keadaan awal. */
     fun reset() {
+        closeSession()
+        pendingDaBytes = null
         _state.value = FlashToolState()
     }
 }

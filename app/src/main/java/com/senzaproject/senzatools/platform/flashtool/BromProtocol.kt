@@ -136,4 +136,145 @@ object BromProtocol {
 
         return BromResult.Identified(hwCode, hwSubCode, hwVersion, swVersion, verResp)
     }
+
+    sealed class DaResult {
+        /** DA1 sudah dikirim, dieksekusi (JUMP_DA), dan membalas byte sinkronisasi 0xC0 — tanda DA hidup. */
+        data class Ready(val syncByte: Int) : DaResult()
+        data class Error(val stage: String, val message: String, val rawReceived: ByteArray? = null) : DaResult()
+    }
+
+    private const val CMD_SEND_DA = 0xD7
+    private const val CMD_JUMP_DA = 0xD5
+    private const val CHUNK_SIZE = 1024
+
+    private fun be32(v: Long): ByteArray = byteArrayOf(
+        ((v shr 24) and 0xFF).toByte(), ((v shr 16) and 0xFF).toByte(),
+        ((v shr 8) and 0xFF).toByte(), (v and 0xFF).toByte()
+    )
+
+    /** Checksum 16-bit yang dipakai BROM untuk verifikasi data yang dikirim: jumlah tiap word (2 byte, big-endian), modulo 0x10000. */
+    private fun bromChecksum(data: ByteArray): Int {
+        var sum = 0
+        var i = 0
+        while (i < data.size) {
+            val hi = data[i].toInt() and 0xFF
+            val lo = if (i + 1 < data.size) data[i + 1].toInt() and 0xFF else 0
+            sum = (sum + ((hi shl 8) or lo)) and 0xFFFF
+            i += 2
+        }
+        return sum
+    }
+
+    /**
+     * Kirim payload DA1 ke alamat SRAM lewat CMD_SEND_DA, lalu CMD_JUMP_DA untuk mengeksekusinya,
+     * lalu tunggu byte sinkronisasi 0xC0 dari DA sebagai bukti DA benar-benar jalan.
+     *
+     * CATATAN JUJUR: struktur echo-parameter dan checksum di bawah mengikuti pola umum protokol
+     * BROM MediaTek yang terdokumentasi publik (host kirim param, device meng-echo, device balas
+     * status; data dikirim per blok lalu diverifikasi checksum). TIDAK ada flashing ke
+     * penyimpanan permanen di fungsi ini — SEND_DA hanya menulis ke RAM volatil chip, jadi kalau
+     * langkah ini gagal, device aman untuk dicolok ulang dan dicoba lagi.
+     */
+    fun sendAndRunDa(conn: UsbDeviceConnection, intf: UsbInterface, payload: ByteArray, region: DaFile.DaRegion): DaResult {
+        val eps = findBulkEndpoints(intf)
+            ?: return DaResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan")
+
+        // 1) CMD_SEND_DA: opcode + address + length + sig_length, masing-masing di-echo device.
+        if (!write(conn, eps.out, byteArrayOf(CMD_SEND_DA.toByte()))) {
+            return DaResult.Error("send_da_cmd", "Gagal mengirim opcode CMD_SEND_DA")
+        }
+        val echoOp = read(conn, eps.`in`, 1)
+        if (echoOp == null || echoOp[0] != CMD_SEND_DA.toByte()) {
+            return DaResult.Error("send_da_cmd_echo", "Device tidak meng-echo opcode CMD_SEND_DA dengan benar", echoOp)
+        }
+
+        val params = be32(region.loadAddress) + be32(region.totalLength.toLong()) + be32(region.sigLength.toLong())
+        if (!write(conn, eps.out, params)) {
+            return DaResult.Error("send_da_params", "Gagal mengirim parameter alamat/panjang/sig-length")
+        }
+        val echoParams = read(conn, eps.`in`, params.size)
+        if (echoParams == null || !echoParams.contentEquals(params)) {
+            return DaResult.Error(
+                "send_da_params_echo",
+                "Device meng-echo parameter berbeda dari yang dikirim — kemungkinan alamat/panjang dari file DA tidak cocok untuk BROM versi ini",
+                echoParams
+            )
+        }
+        val ackBeforeData = read(conn, eps.`in`, 2)
+        if (ackBeforeData == null || ackBeforeData.size < 2 || (ackBeforeData[0].toInt() != 0 || ackBeforeData[1].toInt() != 0)) {
+            return DaResult.Error("send_da_ack", "BROM tidak siap menerima data DA (status bukan 0)", ackBeforeData)
+        }
+
+        // 2) Kirim payload per blok CHUNK_SIZE byte.
+        var off = 0
+        while (off < payload.size) {
+            val len = minOf(CHUNK_SIZE, payload.size - off)
+            val chunk = payload.copyOfRange(off, off + len)
+            if (!write(conn, eps.out, chunk)) {
+                return DaResult.Error("send_da_data", "Gagal mengirim blok data DA pada offset $off dari ${payload.size}")
+            }
+            off += len
+        }
+
+        // 3) Device membalas checksum 16-bit atas seluruh data yang diterima; verifikasi lokal.
+        val checksumResp = read(conn, eps.`in`, 2)
+        if (checksumResp == null || checksumResp.size < 2) {
+            return DaResult.Error("send_da_checksum_missing", "Device tidak membalas checksum setelah data DA dikirim")
+        }
+        val deviceChecksum = ((checksumResp[0].toInt() and 0xFF) shl 8) or (checksumResp[1].toInt() and 0xFF)
+        val localChecksum = bromChecksum(payload)
+        if (deviceChecksum != localChecksum) {
+            return DaResult.Error(
+                "send_da_checksum_mismatch",
+                "Checksum tidak cocok (device: 0x${deviceChecksum.toString(16)}, dihitung lokal: 0x${localChecksum.toString(16)}). " +
+                    "Data DA yang diterima device kemungkinan rusak di tengah jalan — coba ulangi, atau kabel/port USB bermasalah.",
+                checksumResp
+            )
+        }
+
+        val finalStatus = read(conn, eps.`in`, 2)
+        if (finalStatus == null || finalStatus.size < 2 || (finalStatus[0].toInt() != 0 || finalStatus[1].toInt() != 0)) {
+            return DaResult.Error("send_da_final_status", "BROM membalas status error setelah CMD_SEND_DA selesai", finalStatus)
+        }
+
+        // 4) CMD_JUMP_DA: opcode + alamat, device meng-echo lalu membalas status.
+        if (!write(conn, eps.out, byteArrayOf(CMD_JUMP_DA.toByte()))) {
+            return DaResult.Error("jump_da_cmd", "Gagal mengirim opcode CMD_JUMP_DA")
+        }
+        val echoJumpOp = read(conn, eps.`in`, 1)
+        if (echoJumpOp == null || echoJumpOp[0] != CMD_JUMP_DA.toByte()) {
+            return DaResult.Error("jump_da_cmd_echo", "Device tidak meng-echo opcode CMD_JUMP_DA", echoJumpOp)
+        }
+        val jumpAddr = be32(region.loadAddress)
+        if (!write(conn, eps.out, jumpAddr)) {
+            return DaResult.Error("jump_da_addr", "Gagal mengirim alamat JUMP_DA")
+        }
+        val echoJumpAddr = read(conn, eps.`in`, 4)
+        if (echoJumpAddr == null || !echoJumpAddr.contentEquals(jumpAddr)) {
+            return DaResult.Error("jump_da_addr_echo", "Device meng-echo alamat JUMP_DA berbeda dari yang dikirim", echoJumpAddr)
+        }
+        val jumpStatus = read(conn, eps.`in`, 2)
+        if (jumpStatus == null || jumpStatus.size < 2 || (jumpStatus[0].toInt() != 0 || jumpStatus[1].toInt() != 0)) {
+            return DaResult.Error(
+                "jump_da_status",
+                "BROM menolak JUMP_DA (status error). Kalau device punya Secure Boot/DAA aktif dan DA ini tidak " +
+                    "ditandatangani untuk device itu, inilah titik gagalnya — bukan bug di kode ini.",
+                jumpStatus
+            )
+        }
+
+        // 5) Setelah jump, eksekusi berpindah ke DA. DA yang hidup mengirim byte sinkronisasi 0xC0.
+        val sync = read(conn, eps.`in`, 1)
+        if (sync == null || sync.isEmpty()) {
+            return DaResult.Error(
+                "da_sync_timeout",
+                "Tidak ada balasan dari DA setelah JUMP_DA. Device mungkin crash/reboot diam-diam, atau DA1 ini " +
+                    "bukan untuk chip ini meski HW code cocok di file."
+            )
+        }
+        if (sync[0] != 0xC0.toByte()) {
+            return DaResult.Error("da_sync_unexpected", "Byte sinkronisasi dari DA tidak sesuai dugaan (0xC0)", sync)
+        }
+        return DaResult.Ready(sync[0].toInt() and 0xFF)
+    }
 }

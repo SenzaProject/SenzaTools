@@ -1,5 +1,7 @@
 package com.senzaproject.senzatools.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
@@ -22,11 +24,15 @@ fun FlashToolTab(s: ServiceLocator) {
     val g = LocalGlass.current
     val st by s.flashTool.state.collectAsState()
 
+    val daPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) s.flashTool.pickDaFile(uri)
+    }
+
     DisposableEffect(Unit) { onDispose { s.flashTool.dispose() } }
 
     GlassCard(strong = true) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Heading("Flash Tool — Tahap 1: Deteksi BROM")
+            Heading("Flash Tool — Tahap 1+2: BROM & DA")
             StatusPill(
                 when (st.stage) {
                     FlashStage.IDLE -> "Siap"
@@ -34,10 +40,15 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.PERMISSION_NEEDED -> "Menunggu izin USB"
                     FlashStage.HANDSHAKING -> "Handshake…"
                     FlashStage.IDENTIFIED -> "Teridentifikasi"
+                    FlashStage.DA_PARSING -> "Membaca file DA…"
+                    FlashStage.DA_MATCHED -> "DA cocok"
+                    FlashStage.DA_SENDING -> "Mengirim DA…"
+                    FlashStage.DA_READY -> "DA siap"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
-                    FlashStage.IDENTIFIED -> g.good
+                    FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
+                    FlashStage.DA_READY -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -45,10 +56,10 @@ fun FlashToolTab(s: ServiceLocator) {
             )
         }
         Body(
-            "Khusus device Transsion OS (Infinix/Tecno/Itel) chipset MediaTek. Fitur ini baru " +
-                "mendeteksi USB dan membaca identitas chip lewat BootROM — belum mengirim DA dan " +
-                "belum mem-flash apa pun. Flash partisi tunggal menyusul setelah tahap ini terbukti " +
-                "terbaca benar di device asli kamu.",
+            "Khusus device Transsion OS (Infinix/Tecno/Itel) chipset MediaTek. Tahap 2: kirim file DA " +
+                "(Download Agent) yang sudah kamu siapkan sendiri, device menjalankannya di RAM, dan kita " +
+                "tunggu konfirmasi DA hidup. SEND_DA hanya menulis ke RAM volatil — belum menyentuh " +
+                "penyimpanan permanen device, jadi aman diulang kalau gagal.",
             dim = true
         )
     }
@@ -76,7 +87,7 @@ fun FlashToolTab(s: ServiceLocator) {
         }
         st.deviceName?.let { KeyValue("USB device", it) }
         when (st.stage) {
-            FlashStage.IDENTIFIED -> {
+            FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING, FlashStage.DA_READY -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -92,13 +103,44 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
+    if (st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
+        st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING || st.stage == FlashStage.DA_READY
+    ) {
+        GlassCard {
+            Heading("Tahap 2 — Kirim & jalankan DA")
+            Body("Pilih file DA (Download Agent) yang sudah kamu siapkan untuk chipset ini.", dim = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton(
+                    "Pilih file DA",
+                    { daPicker.launch(arrayOf("*/*")) },
+                    enabled = st.stage != FlashStage.DA_PARSING && st.stage != FlashStage.DA_SENDING
+                )
+                if (st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_READY) {
+                    GlassButton(
+                        "Kirim & Jalankan DA",
+                        { s.flashTool.sendAndRunDa() },
+                        primary = true,
+                        enabled = st.stage == FlashStage.DA_MATCHED
+                    )
+                }
+            }
+            st.daSummary?.let {
+                Caption("Hasil pencocokan file DA:")
+                Mono(it)
+            }
+            if (st.stage == FlashStage.DA_READY) {
+                Body("DA sudah hidup dan siap. Belum ada perintah baca/tulis partisi apa pun di tahap ini.", color = g.good)
+            }
+        }
+    }
+
     GlassCard {
         Heading("Status fitur ke depan")
         Body(
-            "• Kirim DA (Download Agent) & akses memori/partisi: belum dibuat\n" +
-                "• Flash partisi tunggal (boot, vbmeta, vendor_boot, dll): belum dibuat\n" +
+            "• Tahap 3: baca scatter/partition table dari device lewat DA — belum dibuat\n" +
+                "• Tahap 4: flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
                 "• Flash ROM penuh dari apk + wipe + auto-restart + fallback recovery: belum dibuat\n" +
-                "Semua akan ditambahkan bertahap setelah deteksi di tahap ini terbukti jalan di device aslimu.",
+                "Semua akan ditambahkan bertahap setelah tahap ini terbukti jalan di device aslimu.",
             dim = true
         )
     }
