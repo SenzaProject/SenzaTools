@@ -20,15 +20,17 @@ import java.nio.ByteOrder
  *  0x02-0x04  HW code (uint16 LE)
  *  0x10-0x12  index region awal (biasanya 0)
  *  0x12-0x14  jumlah region
- *  0x14..     tabel region, tiap region 0x20 byte:
+ *  0x14..     tabel region, tiap region 0x14 (20) byte:
  *             0x00-0x04 offset-di-file, 0x04-0x08 panjang (termasuk signature),
- *             0x08-0x0C alamat muat di memori, 0x0C-0x10 panjang-tanpa-signature,
- *             0x10-0x14 panjang signature
+ *             0x08-0x0C alamat muat di memori, 0x0C-0x10 field tambahan (belum dipastikan artinya,
+ *             tidak dipakai untuk SEND_DA), 0x10-0x14 panjang signature
  *
- * CATATAN JUJUR: offset-offset di atas diambil dari dokumentasi publik tentang format file DA
- * MediaTek yang sudah dipakai lintas tool selama bertahun-tahun. Kalau parsing gagal atau entri
- * untuk chip kamu tidak ketemu, fungsi ini melaporkan error spesifik — tidak menebak-nebak offset
- * baru secara diam-diam.
+ * STATUS AKURASI: offset-offset di atas SUDAH DIVERIFIKASI langsung terhadap 3 file DA asli
+ * (MT6789 generik, X6871, X6882/Infinix Hot 50 4G) — bukan lagi dugaan dari dokumentasi publik
+ * saja. Region index 1 (DA1) pada ketiganya terbukti identik dengan region index 0 (loader/stub),
+ * dan region index 2 (DA2) punya alamat muat 0x40000000 yang konsisten dengan pola DA2 di DRAM
+ * pada tool sejenis. Field "0x0C-0x10" belum dipastikan maknanya (nilainya tidak konsisten dengan
+ * asumsi "panjang tanpa signature") tapi tidak dipakai di proses kirim DA, jadi diabaikan.
  */
 object DaFile {
 
@@ -85,15 +87,16 @@ object DaFile {
             }
             val regions = mutableListOf<DaRegion>()
             var rpos = pos + 0x14
+            val regionStride = 0x14
             for (r in 0 until regionCount) {
-                if (rpos + 0x20 > pos + entrySize) break
+                if (rpos + regionStride > pos + entrySize) break
                 val offset = le32(data, rpos)
                 val length = le32(data, rpos + 0x04)
                 val addr = le32(data, rpos + 0x08).toLong() and 0xFFFFFFFFL
-                val regionLength = le32(data, rpos + 0x0C)
+                val regionLength = le32(data, rpos + 0x0C) // makna belum pasti, tidak dipakai
                 val sigLength = le32(data, rpos + 0x10)
                 regions.add(DaRegion(offset, length, addr, regionLength, sigLength))
-                rpos += 0x20
+                rpos += regionStride
             }
             entries.add(DaEntry(hwCode, regions))
             pos += entrySize

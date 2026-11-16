@@ -30,6 +30,9 @@ fun FlashToolTab(s: ServiceLocator) {
     val preloaderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) s.flashTool.pickPreloaderAndSendEmi(uri)
     }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) s.flashTool.searchFolder(uri)
+    }
 
     DisposableEffect(Unit) { onDispose { s.flashTool.dispose() } }
 
@@ -118,21 +121,46 @@ fun FlashToolTab(s: ServiceLocator) {
         st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED
 
     if (tahap2Visible) {
+        if (st.catalogMatches.isNotEmpty() && st.stage == FlashStage.IDENTIFIED) {
+            GlassCard {
+                Heading("Firmware cocok ditemukan di katalog bawaan")
+                Body("Chip device ini (0x${st.hwCode?.toString(16)}) cocok dengan ${st.catalogMatches.size} entri yang sudah dibundel di APK:", dim = true)
+                st.catalogMatches.forEach { entry ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Caption(entry.label)
+                        GlassButton("Pakai Otomatis", { s.flashTool.useCatalogDa(entry) }, primary = true)
+                    }
+                    Caption(entry.note)
+                }
+            }
+        }
+
         GlassCard {
             Heading("Tahap 2 — Kirim & jalankan DA")
-            Body("Pilih file DA (Download Agent) yang sudah kamu siapkan untuk chipset ini.", dim = true)
+            Body("Pilih file DA (Download Agent) secara manual, atau cari dari folder firmware kamu sendiri.", dim = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton(
                     "Pilih file DA",
                     { daPicker.launch(arrayOf("*/*")) },
                     enabled = st.stage != FlashStage.DA_PARSING && st.stage != FlashStage.DA_SENDING
                 )
+                GlassButton("Cari di Folder", { folderPicker.launch(null) })
                 if (st.stage == FlashStage.DA_MATCHED) {
                     GlassButton(
                         "Kirim & Jalankan DA",
                         { s.flashTool.sendAndRunDa() },
                         primary = true
                     )
+                }
+            }
+            st.folderScanInfo?.let { Caption(it) }
+            if (st.folderDaCandidates.isNotEmpty()) {
+                Caption("DA cocok ditemukan di folder:")
+                st.folderDaCandidates.forEach { c ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Caption(c.name)
+                        GlassButton("Pakai Ini", { s.flashTool.useFolderDa(c) })
+                    }
                 }
             }
             st.daSummary?.let {
@@ -171,17 +199,34 @@ fun FlashToolTab(s: ServiceLocator) {
         GlassCard {
             Heading("Tahap 4 — Kalibrasi DRAM (kirim EMI)")
             Body(
-                "Pilih file preloader.bin ASLI untuk device ini (bukan file DA). EMI diekstrak dari situ " +
-                    "lalu dikirim ke DA sebagai data kalibrasi DRAM. Ini masih konfigurasi RAM — belum " +
-                    "menyentuh eMMC/UFS.",
+                "Preloader.bin ASLI untuk device ini (bukan file DA) dipakai untuk ambil data EMI lalu " +
+                    "dikirim ke DA sebagai kalibrasi DRAM. Masih konfigurasi RAM — belum menyentuh eMMC/UFS.",
                 dim = true
             )
-            GlassButton(
-                if (st.stage == FlashStage.EMI_SENDING) "Mengirim EMI…" else "Pilih preloader.bin & Kirim EMI",
-                { preloaderPicker.launch(arrayOf("*/*")) },
-                primary = true,
-                enabled = st.stage != FlashStage.EMI_SENDING
-            )
+            val catalogPreloader = st.catalogMatches.firstOrNull { it.preloaderAsset != null }
+            if (catalogPreloader != null && st.stage == FlashStage.XFLASH_READY) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Caption("Preloader bawaan: ${catalogPreloader.label}")
+                    GlassButton("Pakai Otomatis", { s.flashTool.useCatalogPreloader(catalogPreloader) }, primary = true)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton(
+                    if (st.stage == FlashStage.EMI_SENDING) "Mengirim EMI…" else "Pilih preloader.bin manual",
+                    { preloaderPicker.launch(arrayOf("*/*")) },
+                    enabled = st.stage != FlashStage.EMI_SENDING
+                )
+                GlassButton("Cari di Folder", { folderPicker.launch(null) }, enabled = st.stage != FlashStage.EMI_SENDING)
+            }
+            if (st.folderPreloaderCandidates.isNotEmpty()) {
+                Caption("Kandidat preloader di folder (berdasar nama file, belum divalidasi):")
+                st.folderPreloaderCandidates.forEach { c ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Caption(c.name)
+                        GlassButton("Coba Ini", { s.flashTool.useFolderPreloader(c) })
+                    }
+                }
+            }
             if (st.stage == FlashStage.EMI_ACCEPTED) {
                 Body(st.info ?: "EMI diterima.", color = g.good)
             }

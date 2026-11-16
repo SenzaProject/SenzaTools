@@ -43,7 +43,11 @@ data class FlashToolState(
     val hwCode: Int? = null,
     val daSummary: String? = null,
     val errorStage: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val catalogMatches: List<FirmwareCatalog.Entry> = emptyList(),
+    val folderDaCandidates: List<FolderFirmwareSearch.DaCandidate> = emptyList(),
+    val folderPreloaderCandidates: List<FolderFirmwareSearch.PreloaderCandidate> = emptyList(),
+    val folderScanInfo: String? = null
 )
 
 /**
@@ -175,11 +179,13 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                             "HW ver: 0x${result.hwVersion.toString(16)} | SW ver: 0x${result.swVersion.toString(16)}"
                         log.add("FlashTool", "BROM identify ${device.deviceName}", "OK: $msg")
                         session = Session(device, conn, intf, result.hwCode)
+                        val catalogMatches = FirmwareCatalog.findForHwCode(result.hwCode)
                         _state.value = FlashToolState(
                             stage = FlashStage.IDENTIFIED,
                             deviceName = device.deviceName,
                             info = msg,
-                            hwCode = result.hwCode
+                            hwCode = result.hwCode,
+                            catalogMatches = catalogMatches
                         )
                     }
                     is BromProtocol.BromResult.Error -> {
@@ -202,6 +208,53 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
      * sudah teridentifikasi di sesi ini. Tidak mengirim apa pun ke device di langkah ini.
      */
     fun pickDaFile(uri: Uri) {
+        val sess = requireSessionForDa() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "da_read", "Gagal membaca file DA yang dipilih (izin akses file atau file tidak valid).")
+                return@launch
+            }
+            processDaBytes(sess, bytes, "pilihan manual")
+        }
+    }
+
+    /** Pakai DA dari katalog bawaan APK (sudah diverifikasi cocok HW code) — tanpa perlu buka file picker. */
+    fun useCatalogDa(entry: FirmwareCatalog.Entry) {
+        val sess = requireSessionForDa() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                FirmwareCatalog.readAsset(ctx, entry.daAsset)
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "da_asset_read", "Gagal membaca DA bawaan dari APK (\"${entry.daAsset}\").")
+                return@launch
+            }
+            processDaBytes(sess, bytes, "katalog bawaan: ${entry.label}")
+        }
+    }
+
+    /** Pakai DA hasil pencarian folder pengguna (sudah divalidasi cocok HW code saat scan). */
+    fun useFolderDa(candidate: FolderFirmwareSearch.DaCandidate) {
+        val sess = requireSessionForDa() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(candidate.uri)?.use { it.readBytes() }
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "da_folder_read", "Gagal membaca ulang file DA \"${candidate.name}\" dari folder.")
+                return@launch
+            }
+            processDaBytes(sess, bytes, "folder: ${candidate.name}")
+        }
+    }
+
+    private fun requireSessionForDa(): Session? {
         val sess = session
         if (sess == null) {
             _state.value = _state.value.copy(
@@ -209,54 +262,81 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 errorStage = "da_no_session",
                 errorMessage = "Belum ada device yang teridentifikasi. Lakukan \"Pindai & Deteksi\" dulu sebelum memilih file DA."
             )
-            return
         }
-        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
-        scope.launch {
-            val bytes = try {
-                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (t: Throwable) {
-                null
-            }
-            if (bytes == null) {
-                postDaError(sess, "da_read", "Gagal membaca file DA yang dipilih (izin akses file atau file tidak valid).")
-                return@launch
-            }
-            when (val parsed = DaFile.parse(bytes)) {
-                is DaFile.ParseResult.Error -> postDaError(sess, "da_parse", parsed.message)
-                is DaFile.ParseResult.Ok -> {
-                    val match = parsed.entries.firstOrNull { it.hwCode == sess.hwCode }
-                    if (match == null) {
-                        val available = parsed.entries.joinToString(", ") { "0x${it.hwCode.toString(16)}" }
-                        postDaError(
-                            sess, "da_no_match",
-                            "File DA ini (\"${parsed.daId}\") tidak punya entri untuk HW code device kamu " +
-                                "(0x${sess.hwCode.toString(16)}). Chip yang didukung file ini: $available. " +
-                                "Pastikan file DA memang untuk chipset Infinix Hot 50 4G kamu."
-                        )
-                        return@launch
-                    }
-                    val da1 = DaFile.da1Of(match)
-                    if (da1 == null) {
-                        postDaError(sess, "da_no_region", "Entri DA untuk chip ini ketemu, tapi tidak punya region DA1 yang bisa dibaca.")
-                        return@launch
-                    }
-                    sess.daEntries = parsed.entries
-                    sess.matchedEntry = match
-                    val summary = "DA cocok untuk HW code 0x${sess.hwCode.toString(16)} | " +
-                        "DA1 @ 0x${da1.loadAddress.toString(16)}, panjang 0x${da1.totalLength.toString(16)} " +
-                        "(sig 0x${da1.sigLength.toString(16)})"
-                    withContext(Dispatchers.Main) {
-                        log.add("FlashTool", "Parse DA", "OK: $summary")
-                        _state.value = _state.value.copy(stage = FlashStage.DA_MATCHED, daSummary = summary)
-                    }
-                    pendingDaBytes = bytes
+        return sess
+    }
+
+    private suspend fun processDaBytes(sess: Session, bytes: ByteArray, sourceLabel: String) {
+        when (val parsed = DaFile.parse(bytes)) {
+            is DaFile.ParseResult.Error -> postDaError(sess, "da_parse", parsed.message)
+            is DaFile.ParseResult.Ok -> {
+                val match = parsed.entries.firstOrNull { it.hwCode == sess.hwCode }
+                if (match == null) {
+                    val available = parsed.entries.joinToString(", ") { "0x${it.hwCode.toString(16)}" }
+                    postDaError(
+                        sess, "da_no_match",
+                        "File DA ini (\"${parsed.daId}\", sumber: $sourceLabel) tidak punya entri untuk HW code device kamu " +
+                            "(0x${sess.hwCode.toString(16)}). Chip yang didukung file ini: $available."
+                    )
+                    return
                 }
+                val da1 = DaFile.da1Of(match)
+                if (da1 == null) {
+                    postDaError(sess, "da_no_region", "Entri DA untuk chip ini ketemu, tapi tidak punya region DA1 yang bisa dibaca.")
+                    return
+                }
+                sess.daEntries = parsed.entries
+                sess.matchedEntry = match
+                val summary = "DA ($sourceLabel) cocok untuk HW code 0x${sess.hwCode.toString(16)} | " +
+                    "DA1 @ 0x${da1.loadAddress.toString(16)}, panjang 0x${da1.totalLength.toString(16)} " +
+                    "(sig 0x${da1.sigLength.toString(16)})"
+                withContext(Dispatchers.Main) {
+                    log.add("FlashTool", "Parse DA", "OK: $summary")
+                    _state.value = _state.value.copy(stage = FlashStage.DA_MATCHED, daSummary = summary)
+                }
+                pendingDaBytes = bytes
             }
         }
     }
 
     @Volatile private var pendingDaBytes: ByteArray? = null
+    @Volatile private var pendingPreloaderBytes: ByteArray? = null
+
+    /** Cari file DA/preloader yang cocok di folder milik pengguna (untuk device di luar katalog bawaan). */
+    fun searchFolder(treeUri: Uri) {
+        val sess = session ?: run {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "folder_no_session",
+                errorMessage = "Belum ada device yang teridentifikasi."
+            )
+            return
+        }
+        scope.launch {
+            val result = try {
+                FolderFirmwareSearch.search(ctx, treeUri, sess.hwCode)
+            } catch (t: Throwable) {
+                null
+            }
+            withContext(Dispatchers.Main) {
+                if (result == null) {
+                    _state.value = _state.value.copy(folderScanInfo = "Gagal membuka folder yang dipilih.")
+                    return@withContext
+                }
+                val info = buildString {
+                    append("${result.filesScanned} file .bin dipindai")
+                    append(" — DA cocok: ${result.daCandidates.size}, kandidat preloader (dari nama file): ${result.preloaderCandidates.size}")
+                    if (result.tooDeep) append(" (pencarian dihentikan di kedalaman folder tertentu supaya tidak terlalu lama)")
+                }
+                log.add("FlashTool", "Cari folder firmware", info)
+                _state.value = _state.value.copy(
+                    folderDaCandidates = result.daCandidates,
+                    folderPreloaderCandidates = result.preloaderCandidates,
+                    folderScanInfo = info
+                )
+            }
+        }
+    }
 
     /** Kirim DA1 yang sudah cocok ke device, lalu JUMP_DA, lalu tunggu konfirmasi DA hidup (byte 0xC0). */
     fun sendAndRunDa() {
@@ -348,8 +428,64 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
-    /** Tahap 4: baca preloader.bin, ekstrak EMI, kirim ke DA sebagai kalibrasi DRAM. */
+    /** Tahap 4: baca preloader.bin pilihan manual, ekstrak EMI, kirim ke DA sebagai kalibrasi DRAM. */
     fun pickPreloaderAndSendEmi(uri: Uri) {
+        val sess = requireSessionForEmi() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "emi_read", "Gagal membaca file preloader.bin yang dipilih.")
+                return@launch
+            }
+            processPreloaderBytes(sess, bytes)
+        }
+    }
+
+    /** Pakai preloader dari katalog bawaan APK untuk kirim EMI, tanpa file picker. */
+    fun useCatalogPreloader(entry: FirmwareCatalog.Entry) {
+        val assetPath = entry.preloaderAsset
+        if (assetPath == null) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "emi_no_catalog_preloader",
+                errorMessage = "Entri katalog \"${entry.label}\" tidak punya preloader bawaan — pilih file preloader.bin secara manual."
+            )
+            return
+        }
+        val sess = requireSessionForEmi() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                FirmwareCatalog.readAsset(ctx, assetPath)
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "emi_asset_read", "Gagal membaca preloader bawaan dari APK (\"$assetPath\").")
+                return@launch
+            }
+            processPreloaderBytes(sess, bytes)
+        }
+    }
+
+    /** Pakai kandidat preloader hasil pencarian folder (dipilih dari nama file, belum tentu valid sampai dicoba). */
+    fun useFolderPreloader(candidate: FolderFirmwareSearch.PreloaderCandidate) {
+        val sess = requireSessionForEmi() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(candidate.uri)?.use { it.readBytes() }
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "emi_folder_read", "Gagal membaca ulang file \"${candidate.name}\" dari folder.")
+                return@launch
+            }
+            processPreloaderBytes(sess, bytes)
+        }
+    }
+
+    private fun requireSessionForEmi(): Session? {
         val sess = session
         if (sess == null || _state.value.stage != FlashStage.XFLASH_READY) {
             _state.value = _state.value.copy(
@@ -357,45 +493,38 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 errorStage = "emi_not_ready",
                 errorMessage = "Kanal XFlash belum siap (XFLASH_READY). Selesaikan Tahap 3 dulu."
             )
-            return
+            return null
         }
-        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
-        scope.launch {
-            val bytes = try {
-                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (t: Throwable) {
-                null
-            }
-            if (bytes == null) {
-                postDaError(sess, "emi_read", "Gagal membaca file preloader.bin yang dipilih.")
-                return@launch
-            }
-            when (val extracted = PreloaderFile.extractEmi(bytes)) {
-                is PreloaderFile.ExtractResult.Error -> postDaError(sess, "emi_extract", extracted.message)
-                is PreloaderFile.ExtractResult.Ok -> {
-                    val result = try {
-                        XFlashProtocol.sendEmi(sess.conn, sess.intf, extracted.emi)
-                    } catch (t: Throwable) {
-                        XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
-                    }
-                    withContext(Dispatchers.Main) {
-                        when (result) {
-                            is XFlashProtocol.XResult.Ok -> {
-                                log.add("FlashTool", "Kirim EMI", "OK: EMI ${extracted.emi.size} byte diterima")
-                                _state.value = _state.value.copy(
-                                    stage = FlashStage.EMI_ACCEPTED,
-                                    info = "Data EMI (${extracted.emi.size} byte) diterima DA. Kalibrasi DRAM selesai — " +
-                                        "belum ada baca/tulis partisi."
-                                )
-                            }
-                            is XFlashProtocol.XResult.Error -> {
-                                log.add("FlashTool", "Kirim EMI", "ERROR[${result.stage}]: ${result.message}")
-                                _state.value = _state.value.copy(
-                                    stage = FlashStage.ERROR,
-                                    errorStage = result.stage,
-                                    errorMessage = result.message
-                                )
-                            }
+        return sess
+    }
+
+    private suspend fun processPreloaderBytes(sess: Session, bytes: ByteArray) {
+        when (val extracted = PreloaderFile.extractEmi(bytes)) {
+            is PreloaderFile.ExtractResult.Error -> postDaError(sess, "emi_extract", extracted.message)
+            is PreloaderFile.ExtractResult.Ok -> {
+                val result = try {
+                    XFlashProtocol.sendEmi(sess.conn, sess.intf, extracted.emi)
+                } catch (t: Throwable) {
+                    XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+                }
+                withContext(Dispatchers.Main) {
+                    when (result) {
+                        is XFlashProtocol.XResult.Ok -> {
+                            log.add("FlashTool", "Kirim EMI", "OK: EMI ${extracted.emi.size} byte diterima")
+                            pendingPreloaderBytes = bytes
+                            _state.value = _state.value.copy(
+                                stage = FlashStage.EMI_ACCEPTED,
+                                info = "Data EMI (${extracted.emi.size} byte) diterima DA. Kalibrasi DRAM selesai — " +
+                                    "belum ada baca/tulis partisi."
+                            )
+                        }
+                        is XFlashProtocol.XResult.Error -> {
+                            log.add("FlashTool", "Kirim EMI", "ERROR[${result.stage}]: ${result.message}")
+                            _state.value = _state.value.copy(
+                                stage = FlashStage.ERROR,
+                                errorStage = result.stage,
+                                errorMessage = result.message
+                            )
                         }
                     }
                 }
@@ -427,6 +556,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     fun reset() {
         closeSession()
         pendingDaBytes = null
+        pendingPreloaderBytes = null
         _state.value = FlashToolState()
     }
 }
