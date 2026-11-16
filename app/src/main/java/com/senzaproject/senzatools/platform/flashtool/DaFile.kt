@@ -106,4 +106,7 @@ object DaFile {
 
     /** Region 1 = DA1 (stage pertama yang dijalankan BROM). Region 0 = loader/stub, Region 2 = DA2. */
     fun da1Of(entry: DaEntry): DaRegion? = entry.regions.getOrNull(1) ?: entry.regions.getOrNull(0)
+
+    /** Region 2 = DA2 (stage kedua, biasanya dimuat di alamat DRAM seperti 0x40000000). */
+    fun da2Of(entry: DaEntry): DaRegion? = entry.regions.getOrNull(2)
 }

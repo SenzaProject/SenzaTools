@@ -30,6 +30,7 @@ object XFlashProtocol {
     // Command devctrl yang well-known publik untuk DA XFlash.
     private const val CMD_GET_DA_VERSION = 0x040005
     private const val CMD_GET_PACKET_LENGTH = 0x040007
+    private const val CMD_BOOT_TO = 0x10008
 
     sealed class XResult {
         data class Ok(val raw: ByteArray) : XResult()
@@ -144,34 +145,85 @@ object XFlashProtocol {
      */
     fun sendEmi(conn: UsbDeviceConnection, intf: UsbInterface, emi: ByteArray): XResult {
         val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+        return sendLengthPrefixedBlock(conn, eps, emi, "emi")
+    }
 
-        val lenBytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(emi.size).array()
+    /** Kirim blok data (panjang dulu, lalu data, lalu baca status) — pola yang sama dipakai EMI dan upload DA2. */
+    private fun sendLengthPrefixedBlock(conn: UsbDeviceConnection, eps: Endpoints, data: ByteArray, tag: String): XResult {
+        val lenBytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(data.size).array()
         if (!sendPacket(conn, eps.out, 1, lenBytes)) {
-            return XResult.Error("emi_send_len", "Gagal mengirim panjang data EMI ke DA")
+            return XResult.Error("${tag}_send_len", "Gagal mengirim panjang data ($tag) ke DA")
         }
         val echoLen = recvPacket(conn, eps.`in`)
-            ?: return XResult.Error("emi_len_ack_timeout", "DA tidak membalas setelah panjang EMI dikirim")
+            ?: return XResult.Error("${tag}_len_ack_timeout", "DA tidak membalas setelah panjang data ($tag) dikirim")
         if (echoLen.first != MAGIC) {
-            return XResult.Error("emi_len_bad_magic", "Balasan DA untuk panjang EMI tidak valid", echoLen.third)
+            return XResult.Error("${tag}_len_bad_magic", "Balasan DA untuk panjang data ($tag) tidak valid", echoLen.third)
         }
-
-        if (!sendPacket(conn, eps.out, 1, emi)) {
-            return XResult.Error("emi_send_data", "Gagal mengirim data EMI (panjang ${emi.size} byte) ke DA")
+        if (!sendPacket(conn, eps.out, 1, data)) {
+            return XResult.Error("${tag}_send_data", "Gagal mengirim data $tag (panjang ${data.size} byte) ke DA")
         }
         val statusPkt = recvPacket(conn, eps.`in`)
-            ?: return XResult.Error("emi_status_timeout", "Tidak ada balasan status dari DA setelah data EMI dikirim")
+            ?: return XResult.Error("${tag}_status_timeout", "Tidak ada balasan status dari DA setelah data $tag dikirim")
         if (statusPkt.first != MAGIC) {
-            return XResult.Error("emi_status_bad_magic", "Paket status EMI dari DA tidak valid", statusPkt.third)
+            return XResult.Error("${tag}_status_bad_magic", "Paket status $tag dari DA tidak valid", statusPkt.third)
         }
         val statusBytes = statusPkt.third
         val status = if (statusBytes.size >= 4) ByteBuffer.wrap(statusBytes).order(ByteOrder.LITTLE_ENDIAN).int else -1
         if (status != 0) {
-            return XResult.Error(
-                "emi_rejected",
-                "DA menolak data EMI (status 0x${status.toString(16)}). Kemungkinan besar preloader.bin yang dipakai " +
-                    "bukan untuk unit device ini persis, atau chip ini tidak butuh EMI eksternal (beberapa chip tidak perlu).",
-                statusBytes
+            return XResult.Error("${tag}_rejected", "DA menolak data $tag (status 0x${status.toString(16)}).", statusBytes)
+        }
+        return XResult.Ok(statusBytes)
+    }
+
+    /**
+     * Upload DA2 ke alamat yang diminta DA file (biasanya 0x40000000 di DRAM), lalu kirim BOOT_TO
+     * untuk menjalankannya.
+     *
+     * CATATAN JUJUR — INI BAGIAN PALING TIDAK PASTI SEJAUH INI:
+     * - Pola "kirim panjang, kirim data, baca status" untuk upload DA2 adalah ASUMSI bahwa upload
+     *   DA2 memakai mekanisme generik yang sama dengan kirim EMI. Belum ada konfirmasi langsung
+     *   byte-level untuk ini seperti yang sudah didapat untuk EMI/preloader.
+     * - CMD_BOOT_TO (0x10008) dipakai dengan menambahkan alamat tujuan (4 byte) sebagai payload
+     *   tambahan setelah kode command — ini juga asumsi, belum dikonfirmasi byte-per-byte.
+     * - Setelah BOOT_TO diterima, beberapa device MELEPAS KONEKSI USB SAAT INI dan muncul lagi
+     *   dengan parameter USB berbeda ("reconnect dengan kecepatan lebih tinggi"). Fungsi ini TIDAK
+     *   menangani reconnect — kalau itu terjadi, pembacaan status setelah BOOT_TO akan timeout,
+     *   dan FlashToolEngine akan melaporkan error dengan saran pindai ulang dari Tahap 1, bukan
+     *   berpura-pura berhasil.
+     */
+    fun uploadDa2AndBootTo(conn: UsbDeviceConnection, intf: UsbInterface, da2: ByteArray, bootAddress: Long): XResult {
+        val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+
+        val uploadResult = sendLengthPrefixedBlock(conn, eps, da2, "da2")
+        if (uploadResult is XResult.Error) return uploadResult
+
+        val bootPayload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(CMD_BOOT_TO).putInt(bootAddress.toInt()).array()
+        if (!sendPacket(conn, eps.out, 1, bootPayload)) {
+            return XResult.Error("boot_to_send", "Gagal mengirim command BOOT_TO ke DA")
+        }
+        val echoBoot = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error(
+                "boot_to_echo_timeout",
+                "DA tidak membalas BOOT_TO. Kemungkinan device sudah reconnect/USB berubah di titik ini — " +
+                    "kalau begitu, pindai ulang dari Tahap 1, bukan ulangi tombol ini."
             )
+        if (echoBoot.first != MAGIC) {
+            return XResult.Error("boot_to_bad_magic", "Balasan BOOT_TO tidak valid", echoBoot.third)
+        }
+        val statusPkt = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error(
+                "boot_to_status_timeout",
+                "Tidak ada status setelah BOOT_TO. Device kemungkinan sedang reconnect USB (stage 2 biasanya " +
+                    "tersambung ulang dengan kecepatan berbeda) — coba pindai ulang dari Tahap 1."
+            )
+        if (statusPkt.first != MAGIC) {
+            return XResult.Error("boot_to_status_bad_magic", "Paket status BOOT_TO tidak valid", statusPkt.third)
+        }
+        val statusBytes = statusPkt.third
+        val status = if (statusBytes.size >= 4) ByteBuffer.wrap(statusBytes).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (status != 0) {
+            return XResult.Error("boot_to_rejected", "DA menolak BOOT_TO (status 0x${status.toString(16)})", statusBytes)
         }
         return XResult.Ok(statusBytes)
     }

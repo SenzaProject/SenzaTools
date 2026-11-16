@@ -54,11 +54,13 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.XFLASH_READY -> "Kanal XFlash siap"
                     FlashStage.EMI_SENDING -> "Mengirim EMI…"
                     FlashStage.EMI_ACCEPTED -> "EMI diterima"
+                    FlashStage.DA2_SENDING -> "Upload DA2…"
+                    FlashStage.DA2_READY -> "DA2 siap"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -99,7 +101,7 @@ fun FlashToolTab(s: ServiceLocator) {
         when (st.stage) {
             FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING,
             FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY,
-            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED -> {
+            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED, FlashStage.DA2_SENDING, FlashStage.DA2_READY -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -118,7 +120,8 @@ fun FlashToolTab(s: ServiceLocator) {
     val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
         st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
-        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED
+        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED ||
+        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY
 
     if (tahap2Visible) {
         if (st.catalogMatches.isNotEmpty() && st.stage == FlashStage.IDENTIFIED) {
@@ -233,10 +236,31 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
+    if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY) {
+        GlassCard {
+            Heading("Tahap 5 — Upload DA2 & jalankan")
+            Body(
+                "Paling tidak pasti sejauh ini: upload DA2 lalu BOOT_TO. Kalau device reconnect USB di titik ini " +
+                    "(perilaku yang diketahui terjadi di beberapa chip), langkah ini akan error dengan jelas — " +
+                    "solusinya pindai ulang dari Tahap 1, bukan ulangi tombol ini berkali-kali.",
+                dim = true
+            )
+            GlassButton(
+                if (st.stage == FlashStage.DA2_SENDING) "Mengupload DA2…" else "Upload DA2 & BOOT_TO",
+                { s.flashTool.uploadDa2() },
+                primary = true,
+                enabled = st.stage != FlashStage.DA2_SENDING
+            )
+            if (st.stage == FlashStage.DA2_READY) {
+                Body(st.info ?: "DA2 siap.", color = g.good)
+            }
+        }
+    }
+
     GlassCard {
         Heading("Status fitur ke depan")
         Body(
-            "• Baca scatter/partition table & info storage (eMMC/UFS) — belum dibuat\n" +
+            "• Baca info storage (eMMC/UFS) & scatter/partition table — belum dibuat\n" +
                 "• Flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
                 "• Flash ROM penuh dari apk + wipe + auto-restart + fallback recovery: belum dibuat\n" +
                 "Semua akan ditambahkan bertahap setelah tahap ini terbukti jalan di device aslimu.",
