@@ -40,7 +40,7 @@ private const val MTK_VID = 0x0E8D
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
     DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY,
-    EMI_SENDING, EMI_ACCEPTED, ERROR
+    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, ERROR
 }
 
 data class FlashToolState(
@@ -572,6 +572,68 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
+    /**
+     * Tahap 5: upload DA2 ke alamat yang ditentukan file DA (biasanya DRAM 0x40000000), lalu BOOT_TO.
+     * Lihat catatan jujur di XFlashProtocol.uploadDa2AndBootTo — ini bagian paling tidak pasti sejauh ini,
+     * termasuk kemungkinan device reconnect USB di titik ini sehingga sesi lama tidak valid lagi.
+     */
+    fun uploadDa2() {
+        val sess = session
+        val entry = sess?.matchedEntry
+        val daBytes = pendingDaBytes
+        if (sess == null || entry == null || daBytes == null || _state.value.stage != FlashStage.EMI_ACCEPTED) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "da2_not_ready",
+                errorMessage = "Kalibrasi EMI belum selesai (EMI_ACCEPTED). Selesaikan Tahap 4 dulu."
+            )
+            return
+        }
+        val region = DaFile.da2Of(entry)
+        if (region == null) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "da2_no_region",
+                errorMessage = "File DA ini tidak punya region DA2 (index 2) — tidak bisa lanjut upload stage 2."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.DA2_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val fileEnd = minOf(region.fileOffset + region.totalLength, daBytes.size)
+            if (region.fileOffset < 0 || region.fileOffset >= daBytes.size || fileEnd <= region.fileOffset) {
+                postDaError(sess, "da2_region_bounds", "Region DA2 di luar batas file DA (offset/panjang tidak valid).")
+                return@launch
+            }
+            val payload = daBytes.copyOfRange(region.fileOffset, fileEnd)
+            val result = try {
+                XFlashProtocol.uploadDa2AndBootTo(sess.conn, sess.intf, payload, region.loadAddress)
+            } catch (t: Throwable) {
+                XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+            }
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is XFlashProtocol.XResult.Ok -> {
+                        log.add("FlashTool", "Upload DA2 + BOOT_TO", "OK")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.DA2_READY,
+                            info = "DA2 diterima & BOOT_TO diterima. BELUM ada baca/tulis partisi — dan kalau langkah " +
+                                "berikutnya gagal, kemungkinan device reconnect USB, coba pindai ulang dari Tahap 1."
+                        )
+                    }
+                    is XFlashProtocol.XResult.Error -> {
+                        log.add("FlashTool", "Upload DA2 + BOOT_TO", "ERROR[${result.stage}]: ${result.message}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.ERROR,
+                            errorStage = result.stage,
+                            errorMessage = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun postError(deviceName: String?, stage: String, message: String) {
         withContext(Dispatchers.Main) {
             log.add("FlashTool", "BROM identify $deviceName", "ERROR[$stage]: $message")
@@ -833,8 +895,15 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                     _files.update { it.copy(running = false, note = "DA hidup dan kanal XFlash siap. Belum ada preloader dipilih, jadi kalibrasi EMI dilewati.") }
                 }
             }
-            FlashStage.EMI_ACCEPTED -> if (running) {
-                _files.update { it.copy(running = false, note = "Sesi siap: DA hidup, kanal XFlash terbuka, EMI diterima.") }
+            FlashStage.EMI_ACCEPTED -> if (running) uploadDa2()
+            FlashStage.DA2_READY -> if (running) {
+                _files.update {
+                    it.copy(
+                        running = false,
+                        note = "Sesi siap: DA hidup, kanal XFlash terbuka, EMI diterima, DA2 sudah di-upload & BOOT_TO. " +
+                            "Kalau koneksi putus setelah ini, itu tanda device reconnect USB — pindai ulang dari Tahap 1."
+                    )
+                }
             }
             FlashStage.ERROR -> if (running || _files.value.waiting) {
                 _files.update { it.copy(running = false, waiting = false) }
