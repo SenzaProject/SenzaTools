@@ -131,4 +131,48 @@ object XFlashProtocol {
         if (verResult is XResult.Error) return verResult
         return verResult
     }
+
+    /**
+     * Kirim data kalibrasi DRAM (EMI, diekstrak dari preloader.bin lewat PreloaderFile) ke DA.
+     * Ini LANGKAH SEBELUM device mau membalas info storage/partition table — bukan menulis ke
+     * penyimpanan permanen, murni data konfigurasi RAM untuk sesi DA ini saja.
+     *
+     * CATATAN JUJUR: urutan "kirim panjang EMI dulu, lalu kirim data EMI, lalu baca status terima/tolak"
+     * diambil dari pola yang konsisten dipakai tool sejenis untuk EMI pada sesi XFlash. Device yang
+     * menolak (status bukan 0) berarti data EMI ini tidak cocok untuk chip/board ini — kemungkinan
+     * besar preloader.bin yang dipakai bukan untuk unit yang sama persis, bukan bug di pengiriman.
+     */
+    fun sendEmi(conn: UsbDeviceConnection, intf: UsbInterface, emi: ByteArray): XResult {
+        val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+
+        val lenBytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(emi.size).array()
+        if (!sendPacket(conn, eps.out, 1, lenBytes)) {
+            return XResult.Error("emi_send_len", "Gagal mengirim panjang data EMI ke DA")
+        }
+        val echoLen = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("emi_len_ack_timeout", "DA tidak membalas setelah panjang EMI dikirim")
+        if (echoLen.first != MAGIC) {
+            return XResult.Error("emi_len_bad_magic", "Balasan DA untuk panjang EMI tidak valid", echoLen.third)
+        }
+
+        if (!sendPacket(conn, eps.out, 1, emi)) {
+            return XResult.Error("emi_send_data", "Gagal mengirim data EMI (panjang ${emi.size} byte) ke DA")
+        }
+        val statusPkt = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("emi_status_timeout", "Tidak ada balasan status dari DA setelah data EMI dikirim")
+        if (statusPkt.first != MAGIC) {
+            return XResult.Error("emi_status_bad_magic", "Paket status EMI dari DA tidak valid", statusPkt.third)
+        }
+        val statusBytes = statusPkt.third
+        val status = if (statusBytes.size >= 4) ByteBuffer.wrap(statusBytes).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (status != 0) {
+            return XResult.Error(
+                "emi_rejected",
+                "DA menolak data EMI (status 0x${status.toString(16)}). Kemungkinan besar preloader.bin yang dipakai " +
+                    "bukan untuk unit device ini persis, atau chip ini tidak butuh EMI eksternal (beberapa chip tidak perlu).",
+                statusBytes
+            )
+        }
+        return XResult.Ok(statusBytes)
+    }
 }

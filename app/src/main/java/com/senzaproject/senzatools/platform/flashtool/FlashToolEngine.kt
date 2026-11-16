@@ -32,7 +32,8 @@ private const val MTK_VID = 0x0E8D
 
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
-    DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY, ERROR
+    DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY,
+    EMI_SENDING, EMI_ACCEPTED, ERROR
 }
 
 data class FlashToolState(
@@ -341,6 +342,61 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                             errorStage = result.stage,
                             errorMessage = result.message
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    /** Tahap 4: baca preloader.bin, ekstrak EMI, kirim ke DA sebagai kalibrasi DRAM. */
+    fun pickPreloaderAndSendEmi(uri: Uri) {
+        val sess = session
+        if (sess == null || _state.value.stage != FlashStage.XFLASH_READY) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "emi_not_ready",
+                errorMessage = "Kanal XFlash belum siap (XFLASH_READY). Selesaikan Tahap 3 dulu."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (t: Throwable) {
+                null
+            }
+            if (bytes == null) {
+                postDaError(sess, "emi_read", "Gagal membaca file preloader.bin yang dipilih.")
+                return@launch
+            }
+            when (val extracted = PreloaderFile.extractEmi(bytes)) {
+                is PreloaderFile.ExtractResult.Error -> postDaError(sess, "emi_extract", extracted.message)
+                is PreloaderFile.ExtractResult.Ok -> {
+                    val result = try {
+                        XFlashProtocol.sendEmi(sess.conn, sess.intf, extracted.emi)
+                    } catch (t: Throwable) {
+                        XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+                    }
+                    withContext(Dispatchers.Main) {
+                        when (result) {
+                            is XFlashProtocol.XResult.Ok -> {
+                                log.add("FlashTool", "Kirim EMI", "OK: EMI ${extracted.emi.size} byte diterima")
+                                _state.value = _state.value.copy(
+                                    stage = FlashStage.EMI_ACCEPTED,
+                                    info = "Data EMI (${extracted.emi.size} byte) diterima DA. Kalibrasi DRAM selesai — " +
+                                        "belum ada baca/tulis partisi."
+                                )
+                            }
+                            is XFlashProtocol.XResult.Error -> {
+                                log.add("FlashTool", "Kirim EMI", "ERROR[${result.stage}]: ${result.message}")
+                                _state.value = _state.value.copy(
+                                    stage = FlashStage.ERROR,
+                                    errorStage = result.stage,
+                                    errorMessage = result.message
+                                )
+                            }
+                        }
                     }
                 }
             }

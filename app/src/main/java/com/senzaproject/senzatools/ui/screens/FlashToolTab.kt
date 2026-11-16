@@ -27,6 +27,9 @@ fun FlashToolTab(s: ServiceLocator) {
     val daPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) s.flashTool.pickDaFile(uri)
     }
+    val preloaderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) s.flashTool.pickPreloaderAndSendEmi(uri)
+    }
 
     DisposableEffect(Unit) { onDispose { s.flashTool.dispose() } }
 
@@ -46,11 +49,13 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.DA_READY -> "DA siap"
                     FlashStage.XFLASH_SYNCING -> "Buka kanal XFlash…"
                     FlashStage.XFLASH_READY -> "Kanal XFlash siap"
+                    FlashStage.EMI_SENDING -> "Mengirim EMI…"
+                    FlashStage.EMI_ACCEPTED -> "EMI diterima"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -90,7 +95,8 @@ fun FlashToolTab(s: ServiceLocator) {
         st.deviceName?.let { KeyValue("USB device", it) }
         when (st.stage) {
             FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING,
-            FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY -> {
+            FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY,
+            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -108,7 +114,8 @@ fun FlashToolTab(s: ServiceLocator) {
 
     val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
-        st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY
+        st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
+        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED
 
     if (tahap2Visible) {
         GlassCard {
@@ -138,23 +145,45 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
-    if (st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY) {
+    if (st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
+        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED
+    ) {
         GlassCard {
             Heading("Tahap 3 — Buka kanal command XFlash")
             Body(
-                "Minta versi DA lewat kanal command XFlash sebagai bukti komunikasi dua arah jalan. " +
-                    "Belum baca partition table, belum upload DA2 — itu baru menyusul setelah ini terbukti jalan.",
+                "Minta versi DA lewat kanal command XFlash sebagai bukti komunikasi dua arah jalan.",
                 dim = true
             )
             GlassButton(
                 if (st.stage == FlashStage.XFLASH_SYNCING) "Membuka kanal…" else "Buka Kanal & Minta Versi DA",
                 { s.flashTool.xflashHandshake() },
                 primary = true,
-                enabled = st.stage != FlashStage.XFLASH_SYNCING
+                enabled = st.stage != FlashStage.XFLASH_SYNCING && st.stage != FlashStage.EMI_SENDING
             )
-            if (st.stage == FlashStage.XFLASH_READY) {
+            if (st.stage == FlashStage.XFLASH_READY || st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED) {
                 Caption("Kanal XFlash terbuka:")
                 Mono(st.info ?: "-")
+            }
+        }
+    }
+
+    if (st.stage == FlashStage.XFLASH_READY || st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED) {
+        GlassCard {
+            Heading("Tahap 4 — Kalibrasi DRAM (kirim EMI)")
+            Body(
+                "Pilih file preloader.bin ASLI untuk device ini (bukan file DA). EMI diekstrak dari situ " +
+                    "lalu dikirim ke DA sebagai data kalibrasi DRAM. Ini masih konfigurasi RAM — belum " +
+                    "menyentuh eMMC/UFS.",
+                dim = true
+            )
+            GlassButton(
+                if (st.stage == FlashStage.EMI_SENDING) "Mengirim EMI…" else "Pilih preloader.bin & Kirim EMI",
+                { preloaderPicker.launch(arrayOf("*/*")) },
+                primary = true,
+                enabled = st.stage != FlashStage.EMI_SENDING
+            )
+            if (st.stage == FlashStage.EMI_ACCEPTED) {
+                Body(st.info ?: "EMI diterima.", color = g.good)
             }
         }
     }
@@ -162,8 +191,7 @@ fun FlashToolTab(s: ServiceLocator) {
     GlassCard {
         Heading("Status fitur ke depan")
         Body(
-            "• Upload DA2 + kalibrasi DRAM/EMI (perlu sebelum baca info storage) — belum dibuat\n" +
-                "• Baca scatter/partition table dari device lewat DA2 — belum dibuat\n" +
+            "• Baca scatter/partition table & info storage (eMMC/UFS) — belum dibuat\n" +
                 "• Flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
                 "• Flash ROM penuh dari apk + wipe + auto-restart + fallback recovery: belum dibuat\n" +
                 "Semua akan ditambahkan bertahap setelah tahap ini terbukti jalan di device aslimu.",
