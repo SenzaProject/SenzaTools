@@ -11,13 +11,20 @@ import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import com.senzaproject.senzatools.data.OperationLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -33,7 +40,7 @@ private const val MTK_VID = 0x0E8D
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
     DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY,
-    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, ERROR
+    EMI_SENDING, EMI_ACCEPTED, ERROR
 }
 
 data class FlashToolState(
@@ -51,6 +58,24 @@ data class FlashToolState(
 )
 
 /**
+ * Pilihan file & status sesi (DA, AUTH, preloader, scatter). Sengaja dipisah dari [FlashToolState]
+ * supaya pilihan file tidak ikut terhapus setiap kali state USB di-reset.
+ */
+data class FlashFiles(
+    val daName: String? = null,
+    val daInfo: String? = null,
+    val authName: String? = null,
+    val preloaderName: String? = null,
+    val scatterName: String? = null,
+    val scatter: ScatterFile.Parsed? = null,
+    val selected: Set<String> = emptySet(),
+    val running: Boolean = false,
+    val waiting: Boolean = false,
+    val preview: String? = null,
+    val note: String? = null
+)
+
+/**
  * Flash Tool — Tahap 1 (deteksi USB + identifikasi chip lewat BROM) dan Tahap 2
  * (parse file DA, cocokkan dengan chip yang teridentifikasi, kirim DA1 lalu jalankan).
  * Koneksi USB disimpan terbuka selama satu sesi BROM supaya Tahap 2 bisa lanjut dari hasil
@@ -64,6 +89,21 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
     private val _state = MutableStateFlow(FlashToolState())
     val state: StateFlow<FlashToolState> = _state.asStateFlow()
+
+    private val _files = MutableStateFlow(FlashFiles())
+    val files: StateFlow<FlashFiles> = _files.asStateFlow()
+
+    @Volatile private var selectedDaBytes: ByteArray? = null
+    @Volatile private var selectedAuthBytes: ByteArray? = null
+    @Volatile private var selectedPreloaderBytes: ByteArray? = null
+    private var pollJob: Job? = null
+
+    init {
+        // Penggerak otomatis: tiap kali tahap berubah, lanjutkan langkah berikutnya.
+        scope.launch {
+            _state.map { it.stage }.distinctUntilChanged().collect { onStage(it) }
+        }
+    }
 
     private val actionUsbPermission = "${ctx.packageName}.USB_PERMISSION_FLASHTOOL"
     private var receiverRegistered = false
@@ -290,11 +330,11 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 val summary = "DA ($sourceLabel) cocok untuk HW code 0x${sess.hwCode.toString(16)} | " +
                     "DA1 @ 0x${da1.loadAddress.toString(16)}, panjang 0x${da1.totalLength.toString(16)} " +
                     "(sig 0x${da1.sigLength.toString(16)})"
+                pendingDaBytes = bytes
                 withContext(Dispatchers.Main) {
                     log.add("FlashTool", "Parse DA", "OK: $summary")
                     _state.value = _state.value.copy(stage = FlashStage.DA_MATCHED, daSummary = summary)
                 }
-                pendingDaBytes = bytes
             }
         }
     }
@@ -532,68 +572,6 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
-    /**
-     * Tahap 5: upload DA2 ke alamat yang ditentukan file DA (biasanya DRAM 0x40000000), lalu BOOT_TO.
-     * Lihat catatan jujur di XFlashProtocol.uploadDa2AndBootTo — ini bagian paling tidak pasti sejauh ini,
-     * termasuk kemungkinan device reconnect USB di titik ini sehingga sesi lama tidak valid lagi.
-     */
-    fun uploadDa2() {
-        val sess = session
-        val entry = sess?.matchedEntry
-        val daBytes = pendingDaBytes
-        if (sess == null || entry == null || daBytes == null || _state.value.stage != FlashStage.EMI_ACCEPTED) {
-            _state.value = _state.value.copy(
-                stage = FlashStage.ERROR,
-                errorStage = "da2_not_ready",
-                errorMessage = "Kalibrasi EMI belum selesai (EMI_ACCEPTED). Selesaikan Tahap 4 dulu."
-            )
-            return
-        }
-        val region = DaFile.da2Of(entry)
-        if (region == null) {
-            _state.value = _state.value.copy(
-                stage = FlashStage.ERROR,
-                errorStage = "da2_no_region",
-                errorMessage = "File DA ini tidak punya region DA2 (index 2) — tidak bisa lanjut upload stage 2."
-            )
-            return
-        }
-        _state.value = _state.value.copy(stage = FlashStage.DA2_SENDING, errorStage = null, errorMessage = null)
-        scope.launch {
-            val fileEnd = minOf(region.fileOffset + region.totalLength, daBytes.size)
-            if (region.fileOffset < 0 || region.fileOffset >= daBytes.size || fileEnd <= region.fileOffset) {
-                postDaError(sess, "da2_region_bounds", "Region DA2 di luar batas file DA (offset/panjang tidak valid).")
-                return@launch
-            }
-            val payload = daBytes.copyOfRange(region.fileOffset, fileEnd)
-            val result = try {
-                XFlashProtocol.uploadDa2AndBootTo(sess.conn, sess.intf, payload, region.loadAddress)
-            } catch (t: Throwable) {
-                XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
-            }
-            withContext(Dispatchers.Main) {
-                when (result) {
-                    is XFlashProtocol.XResult.Ok -> {
-                        log.add("FlashTool", "Upload DA2 + BOOT_TO", "OK")
-                        _state.value = _state.value.copy(
-                            stage = FlashStage.DA2_READY,
-                            info = "DA2 diterima & BOOT_TO diterima. BELUM ada baca/tulis partisi — dan kalau langkah " +
-                                "berikutnya gagal, kemungkinan device reconnect USB, coba pindai ulang dari Tahap 1."
-                        )
-                    }
-                    is XFlashProtocol.XResult.Error -> {
-                        log.add("FlashTool", "Upload DA2 + BOOT_TO", "ERROR[${result.stage}]: ${result.message}")
-                        _state.value = _state.value.copy(
-                            stage = FlashStage.ERROR,
-                            errorStage = result.stage,
-                            errorMessage = result.message
-                        )
-                    }
-                }
-            }
-        }
-    }
-
     private suspend fun postError(deviceName: String?, stage: String, message: String) {
         withContext(Dispatchers.Main) {
             log.add("FlashTool", "BROM identify $deviceName", "ERROR[$stage]: $message")
@@ -611,6 +589,257 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 errorStage = stage,
                 errorMessage = message
             )
+        }
+    }
+
+
+    // ------------------------------------------------------------------ Pilihan file & sesi
+
+    private fun displayName(uri: Uri): String {
+        val fromProvider = try {
+            ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        } catch (_: Throwable) { null }
+        return fromProvider ?: uri.lastPathSegment ?: "file"
+    }
+
+    private fun readBytes(uri: Uri): ByteArray? = try {
+        ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    } catch (_: Throwable) { null }
+
+    /** Pilih file DA. Divalidasi dulu; kalau device sudah teridentifikasi, langsung dicocokkan. */
+    fun selectDa(uri: Uri) {
+        scope.launch {
+            val name = displayName(uri)
+            val bytes = readBytes(uri)
+            if (bytes == null) {
+                _files.update { it.copy(note = "Gagal membaca file DA \"$name\".") }
+                return@launch
+            }
+            when (val p = DaFile.parse(bytes)) {
+                is DaFile.ParseResult.Error ->
+                    _files.update { it.copy(note = "\"$name\" bukan file DA yang valid: ${p.message}") }
+                is DaFile.ParseResult.Ok -> {
+                    selectedDaBytes = bytes
+                    val chips = p.entries.joinToString(", ") { "0x${it.hwCode.toString(16)}" }
+                    _files.update { it.copy(daName = name, daInfo = "HW code didukung: $chips", note = null) }
+                    val sess = session
+                    if (sess != null && _state.value.stage == FlashStage.IDENTIFIED) {
+                        _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+                        processDaBytes(sess, bytes, "pilihan manual: $name")
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearDa() {
+        selectedDaBytes = null
+        _files.update { it.copy(daName = null, daInfo = null) }
+    }
+
+    /** Pilih file AUTH (opsional). Disimpan untuk sesi; pengiriman AUTH belum diimplementasikan di protokol. */
+    fun selectAuth(uri: Uri) {
+        scope.launch {
+            val name = displayName(uri)
+            val bytes = readBytes(uri)
+            if (bytes == null || bytes.isEmpty()) {
+                _files.update { it.copy(note = "Gagal membaca file AUTH \"$name\".") }
+                return@launch
+            }
+            selectedAuthBytes = bytes
+            _files.update { it.copy(authName = name, note = null) }
+        }
+    }
+
+    fun clearAuth() {
+        selectedAuthBytes = null
+        _files.update { it.copy(authName = null) }
+    }
+
+    /** Pilih preloader (opsional). Dipakai setelah DA1 + kanal XFlash siap untuk kirim EMI. */
+    fun selectPreloader(uri: Uri) {
+        scope.launch {
+            val name = displayName(uri)
+            val bytes = readBytes(uri)
+            if (bytes == null || bytes.isEmpty()) {
+                _files.update { it.copy(note = "Gagal membaca preloader \"$name\".") }
+                return@launch
+            }
+            selectedPreloaderBytes = bytes
+            _files.update { it.copy(preloaderName = name, note = null) }
+        }
+    }
+
+    fun clearPreloader() {
+        selectedPreloaderBytes = null
+        _files.update { it.copy(preloaderName = null) }
+    }
+
+    /** Kirim EMI dari preloader yang sudah dipilih lewat tombol "Pilih Preloader" (butuh XFLASH_READY). */
+    fun sendSelectedPreloader() {
+        val bytes = selectedPreloaderBytes
+        if (bytes == null) {
+            _files.update { it.copy(note = "Belum ada preloader yang dipilih.") }
+            return
+        }
+        val sess = requireSessionForEmi() ?: return
+        _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+        scope.launch { processPreloaderBytes(sess, bytes) }
+    }
+
+    /** Pilih file scatter & parse. Tidak butuh HP tersambung. */
+    fun selectScatter(uri: Uri) {
+        scope.launch {
+            val name = displayName(uri)
+            val bytes = readBytes(uri)
+            if (bytes == null) {
+                _files.update { it.copy(note = "Gagal membaca scatter \"$name\".") }
+                return@launch
+            }
+            when (val r = ScatterFile.parse(String(bytes, Charsets.UTF_8))) {
+                is ScatterFile.Result.Error -> _files.update { it.copy(note = r.message) }
+                is ScatterFile.Result.Ok -> {
+                    val all = r.scatter.partitions.filter { it.flashable }.map { it.name }.toSet()
+                    log.add("FlashTool", "Pilih scatter", "OK: $name (${r.scatter.partitions.size} partisi, platform ${r.scatter.platform})")
+                    _files.update {
+                        it.copy(scatterName = name, scatter = r.scatter, selected = all, preview = null, note = null)
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearScatter() {
+        _files.update { it.copy(scatterName = null, scatter = null, selected = emptySet(), preview = null) }
+    }
+
+    fun togglePartition(name: String) {
+        _files.update { f ->
+            f.copy(selected = if (name in f.selected) f.selected - name else f.selected + name, preview = null)
+        }
+    }
+
+    fun selectAllPartitions(all: Boolean) {
+        _files.update { f ->
+            val names = f.scatter?.partitions?.filter { it.flashable }?.map { it.name }?.toSet() ?: emptySet()
+            f.copy(selected = if (all) names else emptySet(), preview = null)
+        }
+    }
+
+    /** TINJAU: ringkasan partisi terpilih dari scatter. Murni baca — tidak ada yang ditulis ke device. */
+    fun tinjau() {
+        val f = _files.value
+        val sc = f.scatter
+        if (sc == null) {
+            _files.update { it.copy(note = "Pilih file scatter dulu.") }
+            return
+        }
+        val chosen = sc.partitions.filter { it.name in f.selected }
+        val text = buildString {
+            appendLine("Platform: ${sc.platform.ifBlank { "-" }} | Storage: ${sc.storage.ifBlank { "-" }}")
+            appendLine("Partisi terpilih: ${chosen.size} dari ${sc.partitions.count { it.flashable }}")
+            var total = 0L
+            chosen.forEach { p ->
+                total += p.size ?: 0L
+                val start = p.linearStart?.let { "0x" + it.toString(16) } ?: "-"
+                appendLine("• ${p.name}  [${p.fileName}]  @$start  ${ScatterFile.formatSize(p.size)}")
+            }
+            append("Total ukuran: ${ScatterFile.formatSize(total)}")
+        }
+        _files.update { it.copy(preview = text, note = null) }
+    }
+
+    private fun hasMtkDevice(): Boolean = usbManager.deviceList.values.any { it.vendorId == MTK_VID }
+
+    /**
+     * MULAI / START: jalankan sesi otomatis (identifikasi → cocokkan & kirim DA → kanal XFlash → EMI
+     * kalau preloader dipilih). Kalau HP target belum tersambung, tunggu sampai muncul (maks 2 menit).
+     * Tidak ada partisi yang ditulis.
+     */
+    fun start() {
+        pollJob?.cancel()
+        _files.update { it.copy(running = true, waiting = false, note = null) }
+        if (hasMtkDevice()) {
+            scanAndConnect()
+            return
+        }
+        _files.update { it.copy(waiting = true) }
+        pollJob = scope.launch {
+            val deadline = System.currentTimeMillis() + 120_000L
+            while (isActive && System.currentTimeMillis() < deadline) {
+                if (hasMtkDevice()) {
+                    _files.update { it.copy(waiting = false) }
+                    withContext(Dispatchers.Main) { scanAndConnect() }
+                    return@launch
+                }
+                delay(500)
+            }
+            _files.update {
+                it.copy(running = false, waiting = false, note = "Waktu tunggu 2 menit habis — device BROM tidak muncul. Cek kabel dan kombinasi tombol, lalu coba lagi.")
+            }
+        }
+    }
+
+    /** BERHENTI: batalkan penantian, tutup sesi USB, kembali ke keadaan awal (pilihan file tetap). */
+    fun stop() {
+        pollJob?.cancel()
+        pollJob = null
+        _files.update { it.copy(running = false, waiting = false) }
+        reset()
+    }
+
+    // Peta HW code → platform, hanya yang sudah terverifikasi di katalog bawaan.
+    private val knownPlatforms = mapOf(0x1208 to "MT6789")
+
+    private suspend fun onStage(stage: FlashStage) {
+        val running = _files.value.running
+        val sess = session
+        when (stage) {
+            FlashStage.IDENTIFIED -> {
+                if (sess == null) return
+                val sc = _files.value.scatter
+                if (running && sc != null && sc.platform.isNotBlank()) {
+                    val known = knownPlatforms[sess.hwCode]
+                    val note = when {
+                        known == null -> "Scatter: ${sc.platform}. HW code 0x${sess.hwCode.toString(16)} belum ada di daftar platform — tidak bisa dicek otomatis."
+                        known.equals(sc.platform, ignoreCase = true) -> null
+                        else -> "PERINGATAN: scatter untuk ${sc.platform}, tapi chip device ($known, HW 0x${sess.hwCode.toString(16)}) berbeda."
+                    }
+                    if (note != null) _files.update { it.copy(note = note) }
+                }
+                val bytes = selectedDaBytes
+                if (bytes != null) {
+                    _state.value = _state.value.copy(stage = FlashStage.DA_PARSING, errorStage = null, errorMessage = null)
+                    processDaBytes(sess, bytes, "pilihan manual: ${_files.value.daName ?: "-"}")
+                } else if (running) {
+                    val entry = _state.value.catalogMatches.firstOrNull()
+                    if (entry != null) {
+                        useCatalogDa(entry)
+                    } else {
+                        _files.update { it.copy(running = false, note = "Pilih file DA dulu — tidak ada DA bawaan yang cocok untuk chip ini.") }
+                    }
+                }
+            }
+            FlashStage.DA_MATCHED -> if (running) sendAndRunDa()
+            FlashStage.DA_READY -> if (running) xflashHandshake()
+            FlashStage.XFLASH_READY -> if (running) {
+                val bytes = selectedPreloaderBytes
+                if (bytes != null && sess != null) {
+                    _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
+                    processPreloaderBytes(sess, bytes)
+                } else {
+                    _files.update { it.copy(running = false, note = "DA hidup dan kanal XFlash siap. Belum ada preloader dipilih, jadi kalibrasi EMI dilewati.") }
+                }
+            }
+            FlashStage.EMI_ACCEPTED -> if (running) {
+                _files.update { it.copy(running = false, note = "Sesi siap: DA hidup, kanal XFlash terbuka, EMI diterima.") }
+            }
+            FlashStage.ERROR -> if (running || _files.value.waiting) {
+                _files.update { it.copy(running = false, waiting = false) }
+            }
+            else -> {}
         }
     }
 

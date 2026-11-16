@@ -3,14 +3,31 @@ package com.senzaproject.senzatools.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.senzaproject.senzatools.di.ServiceLocator
 import com.senzaproject.senzatools.platform.flashtool.FlashStage
+import com.senzaproject.senzatools.platform.flashtool.ScatterFile
 import com.senzaproject.senzatools.ui.components.*
 import com.senzaproject.senzatools.ui.theme.LocalGlass
 
@@ -24,11 +41,19 @@ fun FlashToolTab(s: ServiceLocator) {
     val g = LocalGlass.current
     val st by s.flashTool.state.collectAsState()
 
+    val files by s.flashTool.files.collectAsState()
+
     val daPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) s.flashTool.pickDaFile(uri)
+        if (uri != null) s.flashTool.selectDa(uri)
+    }
+    val authPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) s.flashTool.selectAuth(uri)
     }
     val preloaderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) s.flashTool.pickPreloaderAndSendEmi(uri)
+        if (uri != null) s.flashTool.selectPreloader(uri)
+    }
+    val scatterPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) s.flashTool.selectScatter(uri)
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) s.flashTool.searchFolder(uri)
@@ -54,26 +79,17 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.XFLASH_READY -> "Kanal XFlash siap"
                     FlashStage.EMI_SENDING -> "Mengirim EMI…"
                     FlashStage.EMI_ACCEPTED -> "EMI diterima"
-                    FlashStage.DA2_SENDING -> "Upload DA2…"
-                    FlashStage.DA2_READY -> "DA2 siap"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
                 }
             )
         }
-        Body(
-            "Khusus device Transsion OS (Infinix/Tecno/Itel) chipset MediaTek. Tahap 2: kirim file DA " +
-                "(Download Agent) yang sudah kamu siapkan sendiri, device menjalankannya di RAM, dan kita " +
-                "tunggu konfirmasi DA hidup. SEND_DA hanya menulis ke RAM volatil — belum menyentuh " +
-                "penyimpanan permanen device, jadi aman diulang kalau gagal.",
-            dim = true
-        )
     }
 
     GlassCard {
@@ -101,7 +117,7 @@ fun FlashToolTab(s: ServiceLocator) {
         when (st.stage) {
             FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING,
             FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY,
-            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED, FlashStage.DA2_SENDING, FlashStage.DA2_READY -> {
+            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -117,11 +133,98 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
+    // ------------------------------------------------------------------ Sesi: file + MULAI/BERHENTI
+    val sessionActive = files.running || files.waiting || st.stage != FlashStage.IDLE
+    GlassCard {
+        Heading("Sesi")
+        FileSlot("File DA", files.daName, files.daInfo ?: "Wajib — Download Agent untuk chip target",
+            onPick = { daPicker.launch(arrayOf("*/*")) }, onClear = null)
+        FileSlot("File AUTH", files.authName, "Opsional — untuk BROM dengan DAA",
+            onPick = { authPicker.launch(arrayOf("*/*")) }, onClear = { s.flashTool.clearAuth() })
+        FileSlot("Preloader", files.preloaderName, "Opsional — sumber data EMI setelah DA hidup",
+            onPick = { preloaderPicker.launch(arrayOf("*/*")) }, onClear = { s.flashTool.clearPreloader() })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassButton(
+                when {
+                    files.waiting -> "Menunggu device…"
+                    files.running -> "Berjalan…"
+                    else -> "MULAI"
+                },
+                { s.flashTool.start() },
+                Modifier.weight(1f),
+                primary = true,
+                enabled = files.daName != null && !files.running,
+                icon = Icons.Rounded.PlayArrow
+            )
+            GlassButton(
+                "BERHENTI",
+                { s.flashTool.stop() },
+                Modifier.weight(1f),
+                danger = true,
+                enabled = sessionActive,
+                icon = Icons.Rounded.Stop
+            )
+        }
+        if (files.daName == null) Caption("Pilih file DA untuk memulai sesi.", color = g.warn)
+        files.note?.let { Caption(it, color = g.warn) }
+    }
+
+    // ------------------------------------------------------------------ Scatter: PILIH / START / TINJAU
+    GlassCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Heading("Scatter")
+            StatusPill("${files.selected.size} dipilih", if (files.selected.isEmpty()) g.textDim else g.good)
+        }
+        FileSlot("File scatter", files.scatterName,
+            files.scatter?.let { "${it.platform.ifBlank { "?" }} • ${it.storage.ifBlank { "?" }} • ${it.partitions.size} partisi" }
+                ?: "Bisa dipratinjau tanpa HP tersambung",
+            onPick = { scatterPicker.launch(arrayOf("*/*")) }, onClear = { s.flashTool.clearScatter() }, pickLabel = "Pilih Scatter")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassButton(
+                if (files.waiting) "Menunggu DA…" else "START / TUNGGU DA",
+                { s.flashTool.start() },
+                Modifier.weight(1.4f),
+                primary = true,
+                enabled = !files.running,
+                icon = Icons.Rounded.PlayArrow
+            )
+            GlassButton(
+                "TINJAU",
+                { s.flashTool.tinjau() },
+                Modifier.weight(1f),
+                enabled = files.scatter != null,
+                icon = Icons.Rounded.Bolt
+            )
+        }
+        files.scatter?.let { sc ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton("Pilih semua", { s.flashTool.selectAllPartitions(true) }, Modifier.weight(1f))
+                GlassButton("Kosongkan", { s.flashTool.selectAllPartitions(false) }, Modifier.weight(1f))
+            }
+            sc.partitions.filter { it.flashable }.forEach { p ->
+                Row(
+                    Modifier.fillMaxWidth().clickableNoRipple { s.flashTool.togglePartition(p.name) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = p.name in files.selected,
+                        onCheckedChange = { s.flashTool.togglePartition(p.name) },
+                        colors = CheckboxDefaults.colors(checkedColor = g.accent, uncheckedColor = g.textDim)
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Body(p.name)
+                        Caption("${p.fileName} • ${ScatterFile.formatSize(p.size)}")
+                    }
+                }
+            }
+        }
+        files.preview?.let { Mono(it, size = 11) }
+    }
+
     val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
         st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
-        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED ||
-        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY
+        st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED
 
     if (tahap2Visible) {
         if (st.catalogMatches.isNotEmpty() && st.stage == FlashStage.IDENTIFIED) {
@@ -140,13 +243,7 @@ fun FlashToolTab(s: ServiceLocator) {
 
         GlassCard {
             Heading("Tahap 2 — Kirim & jalankan DA")
-            Body("Pilih file DA (Download Agent) secara manual, atau cari dari folder firmware kamu sendiri.", dim = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GlassButton(
-                    "Pilih file DA",
-                    { daPicker.launch(arrayOf("*/*")) },
-                    enabled = st.stage != FlashStage.DA_PARSING && st.stage != FlashStage.DA_SENDING
-                )
                 GlassButton("Cari di Folder", { folderPicker.launch(null) })
                 if (st.stage == FlashStage.DA_MATCHED) {
                     GlassButton(
@@ -181,10 +278,6 @@ fun FlashToolTab(s: ServiceLocator) {
     ) {
         GlassCard {
             Heading("Tahap 3 — Buka kanal command XFlash")
-            Body(
-                "Minta versi DA lewat kanal command XFlash sebagai bukti komunikasi dua arah jalan.",
-                dim = true
-            )
             GlassButton(
                 if (st.stage == FlashStage.XFLASH_SYNCING) "Membuka kanal…" else "Buka Kanal & Minta Versi DA",
                 { s.flashTool.xflashHandshake() },
@@ -201,11 +294,6 @@ fun FlashToolTab(s: ServiceLocator) {
     if (st.stage == FlashStage.XFLASH_READY || st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED) {
         GlassCard {
             Heading("Tahap 4 — Kalibrasi DRAM (kirim EMI)")
-            Body(
-                "Preloader.bin ASLI untuk device ini (bukan file DA) dipakai untuk ambil data EMI lalu " +
-                    "dikirim ke DA sebagai kalibrasi DRAM. Masih konfigurasi RAM — belum menyentuh eMMC/UFS.",
-                dim = true
-            )
             val catalogPreloader = st.catalogMatches.firstOrNull { it.preloaderAsset != null }
             if (catalogPreloader != null && st.stage == FlashStage.XFLASH_READY) {
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -215,9 +303,10 @@ fun FlashToolTab(s: ServiceLocator) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton(
-                    if (st.stage == FlashStage.EMI_SENDING) "Mengirim EMI…" else "Pilih preloader.bin manual",
-                    { preloaderPicker.launch(arrayOf("*/*")) },
-                    enabled = st.stage != FlashStage.EMI_SENDING
+                    if (st.stage == FlashStage.EMI_SENDING) "Mengirim EMI…" else "Kirim EMI dari Preloader",
+                    { s.flashTool.sendSelectedPreloader() },
+                    enabled = st.stage != FlashStage.EMI_SENDING && files.preloaderName != null,
+                    primary = files.preloaderName != null
                 )
                 GlassButton("Cari di Folder", { folderPicker.launch(null) }, enabled = st.stage != FlashStage.EMI_SENDING)
             }
@@ -235,36 +324,38 @@ fun FlashToolTab(s: ServiceLocator) {
             }
         }
     }
+}
 
-    if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY) {
-        GlassCard {
-            Heading("Tahap 5 — Upload DA2 & jalankan")
-            Body(
-                "Paling tidak pasti sejauh ini: upload DA2 lalu BOOT_TO. Kalau device reconnect USB di titik ini " +
-                    "(perilaku yang diketahui terjadi di beberapa chip), langkah ini akan error dengan jelas — " +
-                    "solusinya pindai ulang dari Tahap 1, bukan ulangi tombol ini berkali-kali.",
-                dim = true
-            )
-            GlassButton(
-                if (st.stage == FlashStage.DA2_SENDING) "Mengupload DA2…" else "Upload DA2 & BOOT_TO",
-                { s.flashTool.uploadDa2() },
-                primary = true,
-                enabled = st.stage != FlashStage.DA2_SENDING
-            )
-            if (st.stage == FlashStage.DA2_READY) {
-                Body(st.info ?: "DA2 siap.", color = g.good)
+/** Satu baris pilihan file: label + nama file terpilih di kiri, tombol pilih (+ bersihkan) di kanan. */
+@Composable
+private fun FileSlot(
+    label: String,
+    fileName: String?,
+    hint: String,
+    onPick: () -> Unit,
+    onClear: (() -> Unit)?,
+    pickLabel: String = "Pilih $label"
+) {
+    val g = LocalGlass.current
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Caption(label)
+                androidx.compose.material3.Text(
+                    fileName ?: "Belum dipilih",
+                    color = if (fileName != null) g.good else g.text,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            GlassButton(pickLabel, onPick, icon = Icons.Rounded.FileOpen)
+            if (onClear != null && fileName != null) {
+                Spacer(Modifier.width(6.dp))
+                GlassButton("Hapus", onClear, icon = Icons.Rounded.Close)
             }
         }
-    }
-
-    GlassCard {
-        Heading("Status fitur ke depan")
-        Body(
-            "• Baca info storage (eMMC/UFS) & scatter/partition table — belum dibuat\n" +
-                "• Flash partisi tunggal (boot, vbmeta, vendor_boot, dll) + verifikasi — belum dibuat\n" +
-                "• Flash ROM penuh dari apk + wipe + auto-restart + fallback recovery: belum dibuat\n" +
-                "Semua akan ditambahkan bertahap setelah tahap ini terbukti jalan di device aslimu.",
-            dim = true
-        )
+        Caption(hint)
     }
 }
