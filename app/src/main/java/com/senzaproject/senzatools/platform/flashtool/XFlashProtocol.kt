@@ -27,10 +27,21 @@ object XFlashProtocol {
     private const val MAGIC = 0xFEEEEEEF.toInt()
     private const val TIMEOUT_MS = 5000
 
-    // Command devctrl yang well-known publik untuk DA XFlash.
+    // Command top-level XFlash yang NILAINYA SUDAH TERKONFIRMASI dari source tool sejenis
+    // (bukan dugaan): WRITE_DATA=0x010004, READ_DATA=0x010005, FORMAT_PARTITION=0x010006,
+    // SHUTDOWN=0x010007, BOOT_TO=0x010008 (cocok dengan yang sudah dipakai Tahap 5),
+    // DEVICE_CTRL=0x010009 (wrapper untuk sub-command seperti GET_DA_VERSION), INIT_EXT_RAM=0x01000A.
+    private const val CMD_DEVICE_CTRL = 0x010009
+    private const val CMD_READ_DATA = 0x010005
     private const val CMD_GET_DA_VERSION = 0x040005
     private const val CMD_GET_PACKET_LENGTH = 0x040007
     private const val CMD_BOOT_TO = 0x10008
+
+    /** Storage type untuk READ_DATA. Nilai EMMC=1 terkonfirmasi dari source; UFS/NAND belum. */
+    const val STORAGE_EMMC = 1
+
+    /** Partition type "area utama" (tempat GPT + partisi Android biasa berada). Belum terkonfirmasi numeriknya — 0 adalah dugaan konvensi umum. */
+    const val PARTTYPE_USER = 0
 
     sealed class XResult {
         data class Ok(val raw: ByteArray) : XResult()
@@ -93,21 +104,20 @@ object XFlashProtocol {
      * sama, lalu device membalas status (4 byte, 0 = sukses) dibungkus paket. Kalau status sukses
      * dan ada data lanjutan, paket berikutnya berisi data tersebut.
      */
+    /**
+     * DIPERBARUI: devctrl ternyata dua langkah — kirim wrapper DEVICE_CTRL (0x010009) dulu,
+     * BARU kirim sub-command (mis. GET_DA_VERSION). Sebelumnya fungsi ini langsung kirim
+     * sub-command tanpa wrapper; ini koreksi setelah ketemu referensi konkret. Dampaknya ke
+     * Tahap 3 (GET_DA_VERSION) yang sudah ditulis sebelumnya — belum pernah dites di device asli,
+     * jadi koreksi ini tidak "merusak" sesuatu yang terbukti jalan.
+     */
     private fun sendDevCtrl(conn: UsbDeviceConnection, eps: Endpoints, cmd: Int): XResult {
-        val cmdBytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(cmd).array()
-        if (!sendPacket(conn, eps.out, 1, cmdBytes)) {
-            return XResult.Error("xflash_send_cmd", "Gagal mengirim paket command 0x${cmd.toString(16)} ke DA")
-        }
-        val echo = recvPacket(conn, eps.`in`)
-            ?: return XResult.Error("xflash_echo_timeout", "DA tidak membalas echo untuk command 0x${cmd.toString(16)} (tidak ada respons USB)")
-        if (echo.first != MAGIC) {
-            return XResult.Error(
-                "xflash_bad_magic",
-                "Magic paket balasan DA tidak sesuai (0x${echo.first.toString(16)}, diharapkan 0x${MAGIC.toString(16)}). " +
-                    "Kemungkinan DA ini belum di sesi XFlash, atau butuh handshake tambahan sebelum command ini.",
-                echo.third
-            )
-        }
+        val wrapperEcho = sendAndEcho(conn, eps, CMD_DEVICE_CTRL, "xflash_devctrl_wrapper")
+        if (wrapperEcho is XResult.Error) return wrapperEcho
+
+        val cmdEcho = sendAndEcho(conn, eps, cmd, "xflash_devctrl_cmd")
+        if (cmdEcho is XResult.Error) return cmdEcho
+
         val statusPkt = recvPacket(conn, eps.`in`)
             ?: return XResult.Error("xflash_status_timeout", "Tidak ada paket status dari DA setelah command 0x${cmd.toString(16)}")
         if (statusPkt.first != MAGIC) {
@@ -120,6 +130,88 @@ object XFlashProtocol {
             return XResult.Error("xflash_status_error", "DA membalas status error (0x${status.toString(16)}) untuk command 0x${cmd.toString(16)}", statusBytes)
         }
         return XResult.Ok(statusBytes)
+    }
+
+    /** Kirim satu kode command (4 byte LE) dan pastikan DA meng-echo paket yang sama. */
+    private fun sendAndEcho(conn: UsbDeviceConnection, eps: Endpoints, cmd: Int, tag: String): XResult {
+        val cmdBytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(cmd).array()
+        if (!sendPacket(conn, eps.out, 1, cmdBytes)) {
+            return XResult.Error("${tag}_send", "Gagal mengirim paket command 0x${cmd.toString(16)} ke DA")
+        }
+        val echo = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("${tag}_echo_timeout", "DA tidak membalas echo untuk command 0x${cmd.toString(16)}")
+        if (echo.first != MAGIC) {
+            return XResult.Error(
+                "${tag}_bad_magic",
+                "Magic paket balasan DA tidak sesuai (0x${echo.first.toString(16)}, diharapkan 0x${MAGIC.toString(16)}) untuk command 0x${cmd.toString(16)}.",
+                echo.third
+            )
+        }
+        return XResult.Ok(echo.third)
+    }
+
+    /**
+     * Baca data mentah dari storage (eMMC/UFS) lewat command READ_DATA — dipakai untuk ambil
+     * sektor awal yang berisi GPT (partition table), BUKAN untuk membaca partisi tertentu.
+     *
+     * CATATAN JUJUR: opcode READ_DATA (0x010005) dan format parameter (storage, parttype, addr,
+     * size sebagai 4+4+8+8 byte) terkonfirmasi dari source tool sejenis. Yang BELUM pasti: nilai
+     * numerik parttype "area utama" (saya pakai 0 sebagai dugaan konvensi umum) dan apakah device
+     * ini eMMC (storage=1, yang saya pakai) atau UFS (nilai beda, belum terkonfirmasi). Kalau
+     * parameter ini salah, device akan menolak dengan status error jelas — bukan mengirim data
+     * sampah yang diterima diam-diam (GptParser juga memvalidasi signature "EFI PART" sebelum
+     * menganggap data ini GPT valid).
+     */
+    fun readData(conn: UsbDeviceConnection, intf: UsbInterface, storage: Int, parttype: Int, addr: Long, size: Long): XResult {
+        val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+
+        val cmdEcho = sendAndEcho(conn, eps, CMD_READ_DATA, "read_data_cmd")
+        if (cmdEcho is XResult.Error) return cmdEcho
+
+        val statusBefore = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("read_data_precheck_timeout", "Tidak ada status dari DA setelah command READ_DATA")
+        val preStatus = if (statusBefore.third.size >= 4)
+            ByteBuffer.wrap(statusBefore.third).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (preStatus != 0) {
+            return XResult.Error("read_data_rejected", "DA menolak command READ_DATA (status 0x${preStatus.toString(16)})", statusBefore.third)
+        }
+
+        val param = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(storage).putInt(parttype).putLong(addr).putLong(size).array()
+        if (!sendPacket(conn, eps.out, 1, param)) {
+            return XResult.Error("read_data_param_send", "Gagal mengirim parameter READ_DATA (storage/parttype/addr/size)")
+        }
+        val paramEcho = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("read_data_param_echo_timeout", "DA tidak membalas setelah parameter READ_DATA dikirim")
+        if (paramEcho.first != MAGIC) {
+            return XResult.Error("read_data_param_bad_magic", "Balasan parameter READ_DATA tidak valid", paramEcho.third)
+        }
+
+        val out = ByteArray(size.toInt())
+        var received = 0
+        while (received < out.size) {
+            val chunkPkt = recvPacket(conn, eps.`in`)
+                ?: return XResult.Error("read_data_chunk_timeout", "Koneksi terputus saat membaca data (baru $received dari ${out.size} byte)")
+            if (chunkPkt.first != MAGIC) {
+                return XResult.Error("read_data_chunk_bad_magic", "Paket data dari DA tidak valid di tengah pembacaan", chunkPkt.third)
+            }
+            val chunk = chunkPkt.third
+            if (chunk.isEmpty()) break
+            val toCopy = minOf(chunk.size, out.size - received)
+            System.arraycopy(chunk, 0, out, received, toCopy)
+            received += toCopy
+        }
+        if (received < out.size) {
+            return XResult.Error("read_data_incomplete", "Data yang diterima ($received byte) lebih sedikit dari yang diminta (${out.size} byte).")
+        }
+
+        val finalStatus = recvPacket(conn, eps.`in`)
+        val fStatus = if (finalStatus != null && finalStatus.third.size >= 4)
+            ByteBuffer.wrap(finalStatus.third).order(ByteOrder.LITTLE_ENDIAN).int else 0
+        if (finalStatus != null && fStatus != 0) {
+            return XResult.Error("read_data_final_status", "DA membalas status error (0x${fStatus.toString(16)}) setelah data selesai dikirim", finalStatus.third)
+        }
+        return XResult.Ok(out)
     }
 
     /**

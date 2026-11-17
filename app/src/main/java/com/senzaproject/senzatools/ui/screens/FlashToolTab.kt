@@ -81,11 +81,13 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.EMI_ACCEPTED -> "EMI diterima"
                     FlashStage.DA2_SENDING -> "Upload DA2…"
                     FlashStage.DA2_READY -> "DA2 siap"
+                    FlashStage.GPT_READING -> "Membaca GPT…"
+                    FlashStage.GPT_READY -> "GPT terbaca"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY, FlashStage.GPT_READY -> g.good
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -119,7 +121,8 @@ fun FlashToolTab(s: ServiceLocator) {
         when (st.stage) {
             FlashStage.IDENTIFIED, FlashStage.DA_MATCHED, FlashStage.DA_SENDING,
             FlashStage.DA_READY, FlashStage.XFLASH_SYNCING, FlashStage.XFLASH_READY,
-            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED, FlashStage.DA2_SENDING, FlashStage.DA2_READY -> {
+            FlashStage.EMI_SENDING, FlashStage.EMI_ACCEPTED, FlashStage.DA2_SENDING, FlashStage.DA2_READY,
+            FlashStage.GPT_READING, FlashStage.GPT_READY -> {
                 Caption("Chip teridentifikasi lewat BROM:")
                 Mono(st.info ?: "-")
             }
@@ -227,7 +230,8 @@ fun FlashToolTab(s: ServiceLocator) {
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
         st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
         st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED ||
-        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY
+        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY ||
+        st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY
 
     if (tahap2Visible) {
         if (st.catalogMatches.isNotEmpty() && st.stage == FlashStage.IDENTIFIED) {
@@ -278,7 +282,8 @@ fun FlashToolTab(s: ServiceLocator) {
 
     if (st.stage == FlashStage.DA_READY || st.stage == FlashStage.XFLASH_SYNCING || st.stage == FlashStage.XFLASH_READY ||
         st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED ||
-        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY
+        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY ||
+        st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY
     ) {
         GlassCard {
             Heading("Tahap 3 — Buka kanal command XFlash")
@@ -296,7 +301,8 @@ fun FlashToolTab(s: ServiceLocator) {
     }
 
     if (st.stage == FlashStage.XFLASH_READY || st.stage == FlashStage.EMI_SENDING || st.stage == FlashStage.EMI_ACCEPTED ||
-        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY
+        st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY ||
+        st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY
     ) {
         GlassCard {
             Heading("Tahap 4 — Kalibrasi DRAM (kirim EMI)")
@@ -325,13 +331,15 @@ fun FlashToolTab(s: ServiceLocator) {
                     }
                 }
             }
-            if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY) {
+            if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY ||
+        st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY) {
                 Body("EMI diterima.", color = g.good)
             }
         }
     }
 
-    if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY) {
+    if (st.stage == FlashStage.EMI_ACCEPTED || st.stage == FlashStage.DA2_SENDING || st.stage == FlashStage.DA2_READY ||
+        st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY) {
         GlassCard {
             Heading("Tahap 5 — Upload DA2 & jalankan")
             Body(
@@ -347,8 +355,36 @@ fun FlashToolTab(s: ServiceLocator) {
                 primary = true,
                 enabled = st.stage == FlashStage.EMI_ACCEPTED
             )
-            if (st.stage == FlashStage.DA2_READY) {
-                Body(st.info ?: "DA2 siap.", color = g.good)
+            if (st.stage == FlashStage.DA2_READY || st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY) {
+                Body("DA2 ter-upload & BOOT_TO diterima.", color = g.good)
+            }
+        }
+    }
+
+    if (st.stage == FlashStage.DA2_READY || st.stage == FlashStage.GPT_READING || st.stage == FlashStage.GPT_READY) {
+        GlassCard {
+            Heading("Tahap 6 — Baca partition table (GPT)")
+            Body(
+                "Baca 34 sektor awal storage (MBR + header GPT + tabel entri) lewat command READ_DATA, lalu " +
+                    "parse sebagai GPT standar. Murni baca, tidak menulis apa pun. Asumsi yang belum terkonfirmasi: " +
+                    "tipe storage (dipakai eMMC) dan kode \"area utama\" — kalau salah, device akan menolak dengan " +
+                    "status error jelas, atau signature GPT tidak ketemu (dilaporkan sebagai error, bukan data palsu).",
+                dim = true
+            )
+            GlassButton(
+                if (st.stage == FlashStage.GPT_READING) "Membaca GPT…" else "Baca Partition Table",
+                { s.flashTool.readPartitionTable() },
+                primary = true,
+                enabled = st.stage == FlashStage.DA2_READY
+            )
+            if (st.stage == FlashStage.GPT_READY) {
+                Caption("${st.gptEntries.size} partisi terbaca:")
+                st.gptEntries.forEach { p ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Caption(p.name)
+                        Caption(ScatterFile.formatSize(p.sizeBytes))
+                    }
+                }
             }
         }
     }

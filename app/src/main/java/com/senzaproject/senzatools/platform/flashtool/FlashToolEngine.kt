@@ -40,7 +40,7 @@ private const val MTK_VID = 0x0E8D
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
     DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY,
-    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, ERROR
+    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, GPT_READING, GPT_READY, ERROR
 }
 
 data class FlashToolState(
@@ -54,7 +54,8 @@ data class FlashToolState(
     val catalogMatches: List<FirmwareCatalog.Entry> = emptyList(),
     val folderDaCandidates: List<FolderFirmwareSearch.DaCandidate> = emptyList(),
     val folderPreloaderCandidates: List<FolderFirmwareSearch.PreloaderCandidate> = emptyList(),
-    val folderScanInfo: String? = null
+    val folderScanInfo: String? = null,
+    val gptEntries: List<GptParser.Entry> = emptyList()
 )
 
 /**
@@ -634,6 +635,65 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
+    /**
+     * Tahap 6: baca sektor awal storage (cukup untuk GPT: MBR + header + tabel entri) dan parse
+     * jadi daftar partisi. Murni baca — tidak menulis apa pun ke device.
+     */
+    fun readPartitionTable() {
+        val sess = session
+        if (sess == null || _state.value.stage != FlashStage.DA2_READY) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "gpt_not_ready",
+                errorMessage = "DA2 belum siap (DA2_READY). Selesaikan Tahap 5 dulu."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.GPT_READING, errorStage = null, errorMessage = null)
+        scope.launch {
+            // 34 sektor x 512 byte = MBR (1) + GPT header (1) + tabel entri standar (32, cukup untuk 128 entri x 128 byte).
+            val sectorsToRead = 34
+            val sizeBytes = sectorsToRead.toLong() * 512L
+            val result = try {
+                XFlashProtocol.readData(sess.conn, sess.intf, XFlashProtocol.STORAGE_EMMC, XFlashProtocol.PARTTYPE_USER, 0L, sizeBytes)
+            } catch (t: Throwable) {
+                XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+            }
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is XFlashProtocol.XResult.Ok -> {
+                        when (val parsed = GptParser.parse(result.raw)) {
+                            is GptParser.Result.Ok -> {
+                                log.add("FlashTool", "Baca GPT", "OK: ${parsed.entries.size} partisi, ${parsed.headerInfo}")
+                                _state.value = _state.value.copy(
+                                    stage = FlashStage.GPT_READY,
+                                    gptEntries = parsed.entries,
+                                    info = "${parsed.entries.size} partisi terbaca dari GPT (${parsed.headerInfo})."
+                                )
+                            }
+                            is GptParser.Result.Error -> {
+                                log.add("FlashTool", "Baca GPT", "ERROR[gpt_parse]: ${parsed.message}")
+                                _state.value = _state.value.copy(
+                                    stage = FlashStage.ERROR,
+                                    errorStage = "gpt_parse",
+                                    errorMessage = parsed.message
+                                )
+                            }
+                        }
+                    }
+                    is XFlashProtocol.XResult.Error -> {
+                        log.add("FlashTool", "Baca GPT", "ERROR[${result.stage}]: ${result.message}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.ERROR,
+                            errorStage = result.stage,
+                            errorMessage = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun postError(deviceName: String?, stage: String, message: String) {
         withContext(Dispatchers.Main) {
             log.add("FlashTool", "BROM identify $deviceName", "ERROR[$stage]: $message")
@@ -896,12 +956,13 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 }
             }
             FlashStage.EMI_ACCEPTED -> if (running) uploadDa2()
-            FlashStage.DA2_READY -> if (running) {
+            FlashStage.DA2_READY -> if (running) readPartitionTable()
+            FlashStage.GPT_READY -> if (running) {
                 _files.update {
                     it.copy(
                         running = false,
-                        note = "Sesi siap: DA hidup, kanal XFlash terbuka, EMI diterima, DA2 sudah di-upload & BOOT_TO. " +
-                            "Kalau koneksi putus setelah ini, itu tanda device reconnect USB — pindai ulang dari Tahap 1."
+                        note = "Sesi siap: DA hidup, kanal XFlash terbuka, EMI diterima, DA2 ter-upload, GPT terbaca " +
+                            "(${_state.value.gptEntries.size} partisi). Belum ada tulis ke partisi mana pun."
                     )
                 }
             }
