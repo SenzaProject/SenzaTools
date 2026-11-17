@@ -61,6 +61,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true // untuk IShizukuUserService.aidl — eksekusi perintah sungguhan lewat Shizuku
     }
     packaging {
         resources {
@@ -75,6 +76,8 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.documentfile:documentfile:1.0.1") // Flash Tool: pencarian file DA/preloader di folder pengguna
+    implementation("dev.rikka.shizuku:api:13.1.5") // Eksekusi perintah sungguhan lewat Shizuku, bukan sekadar deteksi terpasang
+    implementation("dev.rikka.shizuku:provider:13.1.5")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

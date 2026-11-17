@@ -86,9 +86,27 @@ private fun AccessTab(s: ServiceLocator) {
     ExpandableCard("Kemampuan mode aktif", true) { st.capabilities.forEach { Body("✓ $it") } }
     ExpandableCard("Batasan", true) { st.limits.forEach { Body("• $it", dim = true) } }
     GlassCard {
+        val shizukuStatus by s.access.shizukuStatus.collectAsState()
         Heading("ADB / Shizuku")
         KeyValue("Shizuku", if (st.shizukuInstalled) "Terpasang" else "Tidak terdeteksi")
-        Caption("Integrasi eksekusi lewat Shizuku belum disertakan di versi ini. Senza Tools tidak menganggap Shizuku, ADB, dan Root setara; fitur yang butuh root tidak akan berjalan hanya dengan Shizuku.")
+        KeyValue(
+            "Status",
+            when (shizukuStatus) {
+                com.senzaproject.senzatools.shizuku.ShizukuManager.Status.READY -> "Aktif, izin diberikan"
+                com.senzaproject.senzatools.shizuku.ShizukuManager.Status.NEEDS_PERMISSION -> "Aktif, izin belum diberikan"
+                com.senzaproject.senzatools.shizuku.ShizukuManager.Status.DENIED -> "Izin ditolak"
+                com.senzaproject.senzatools.shizuku.ShizukuManager.Status.UNAVAILABLE -> "Service Shizuku tidak berjalan"
+            }
+        )
+        if (st.shizukuInstalled && shizukuStatus == com.senzaproject.senzatools.shizuku.ShizukuManager.Status.NEEDS_PERMISSION) {
+            GlassButton("Minta izin Shizuku", {
+                scope.launch {
+                    val granted = s.access.requestShizukuPermission()
+                    msg = if (granted) "Izin Shizuku diberikan." else "Izin Shizuku ditolak."
+                }
+            }, primary = true)
+        }
+        Caption("Senza Tools tidak menganggap Shizuku, ADB, dan Root setara; fitur yang butuh root tidak akan berjalan hanya dengan Shizuku. Eksekusi lewat Shizuku dipakai bertahap untuk fitur yang memang cocok dengan mode ADB/shell.")
     }
     GlassCard {
         Heading("Prinsip keamanan")

@@ -11,6 +11,7 @@ import com.senzaproject.senzatools.domain.model.RootEnvironment
 import com.senzaproject.senzatools.platform.root.CommandGuard
 import com.senzaproject.senzatools.platform.root.RootPower
 import com.senzaproject.senzatools.platform.root.SafeAction
+import com.senzaproject.senzatools.shizuku.ShizukuManager
 import com.senzaproject.senzatools.utils.ShellResult
 import com.senzaproject.senzatools.utils.Sys
 import kotlinx.coroutines.CoroutineScope
@@ -91,7 +92,13 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
             limits += "Hanya aksi terdefinisi atau perintah yang kamu ketik dan konfirmasi"
         }
         if (shizuku) {
-            limits += "Shizuku terdeteksi terpasang, tetapi eksekusi lewat Shizuku belum disertakan di versi ini"
+            val shizukuNote = when (ShizukuManager.status.value) {
+                ShizukuManager.Status.READY -> "Shizuku aktif & izin diberikan (${ShizukuManager.uidLabel() ?: "menyambung…"})"
+                ShizukuManager.Status.NEEDS_PERMISSION -> "Shizuku aktif, tapi izin belum diberikan — tekan \"Minta izin Shizuku\""
+                ShizukuManager.Status.DENIED -> "Izin Shizuku ditolak — bisa diminta ulang kapan saja"
+                ShizukuManager.Status.UNAVAILABLE -> "Aplikasi Shizuku terpasang tapi service-nya belum/tidak berjalan — buka & aktifkan Shizuku dulu"
+            }
+            limits += shizukuNote
         }
         return AccessState(active, RootEnvironment(managers, su, rootVerified, details), shizuku, caps, limits)
     }
@@ -122,6 +129,17 @@ class AccessManager(private val ctx: Context, private val log: OperationLog) {
         } finally {
             rootChecking = false
         }
+    }
+
+    /** Status Shizuku terkini (dipakai UI untuk tombol/label, lihat [ShizukuManager]). */
+    val shizukuStatus: StateFlow<ShizukuManager.Status> get() = ShizukuManager.status
+
+    /** Minta izin Shizuku (dialog resmi dari aplikasi Shizuku, bukan dialog buatan sendiri). */
+    suspend fun requestShizukuPermission(): Boolean {
+        val granted = ShizukuManager.requestPermission()
+        log.add("SHIZUKU", "minta izin Shizuku", if (granted) "diberikan" else "ditolak/belum tersedia")
+        _state.value = detect()
+        return granted
     }
 
     fun revokeRootSession() {
