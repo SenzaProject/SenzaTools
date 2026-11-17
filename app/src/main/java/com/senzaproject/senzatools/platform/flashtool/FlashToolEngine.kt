@@ -169,14 +169,29 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     fun scanAndConnect() {
         closeSession()
         _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE)
-        val candidates = usbManager.deviceList.values.filter { it.vendorId == MTK_VID }
+        val allDevices = usbManager.deviceList.values.toList()
+        val candidates = allDevices.filter { it.vendorId == MTK_VID }
         if (candidates.isEmpty()) {
+            val hasUsbHost = ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)
+            val message = when {
+                !hasUsbHost ->
+                    "HP yang menjalankan Senza Tools ini TIDAK mendukung mode USB Host (OTG) menurut sistem Android-nya sendiri. " +
+                        "Tanpa fitur ini, HP tidak akan pernah bisa membaca device lain lewat USB, apa pun yang dilakukan di sisi device target."
+                allDevices.isEmpty() ->
+                    "Sistem Android di HP ini sama sekali TIDAK melihat ada USB device tersambung (daftar device kosong total). " +
+                        "Ini biasanya berarti: (1) kabel yang dipakai cuma kabel charge-only (tanpa jalur data), " +
+                        "(2) belum pakai adaptor OTG kalau port HP ini USB-C ke USB-C tanpa dukungan host langsung, atau " +
+                        "(3) device target belum benar-benar masuk mode BROM (preloader-nya mungkin sudah lanjut booting normal)."
+                else ->
+                    "Ada ${allDevices.size} USB device terlihat, tapi tidak ada yang Vendor ID-nya MediaTek (0x0E8D). " +
+                        "Yang terdeteksi: " + allDevices.joinToString("; ") {
+                            "VID 0x${it.vendorId.toString(16)} PID 0x${it.productId.toString(16)} (${it.deviceName})"
+                        } + ". Device target kemungkinan belum masuk mode BROM, atau masuk ke mode USB lain (mis. mode charging/MTP biasa)."
+            }
             _state.value = FlashToolState(
                 stage = FlashStage.ERROR,
                 errorStage = "scan",
-                errorMessage = "Tidak ada USB device dengan Vendor ID MediaTek (0x0E8D) terdeteksi. " +
-                    "Pastikan HP dalam kondisi mati, baterai cukup, lalu colok kabel USB sambil tahan tombol volume " +
-                    "(naik/turun, tergantung model) untuk masuk mode BROM/Preloader."
+                errorMessage = message
             )
             return
         }
