@@ -40,8 +40,18 @@ private const val MTK_VID = 0x0E8D
 enum class FlashStage {
     IDLE, WAITING_DEVICE, PERMISSION_NEEDED, HANDSHAKING, IDENTIFIED,
     DA_PARSING, DA_MATCHED, DA_SENDING, DA_READY, XFLASH_SYNCING, XFLASH_READY,
-    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, GPT_READING, GPT_READY, ERROR
+    EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, GPT_READING, GPT_READY,
+    WRITING, WRITE_DONE, ERROR
 }
+
+/** Permintaan tulis partisi yang menunggu konfirmasi eksplisit pengguna — belum ada yang ditulis ke device. */
+data class WritePending(
+    val partitionName: String,
+    val entry: GptParser.Entry,
+    val imageUri: Uri,
+    val imageSize: Long,
+    val fitsInPartition: Boolean
+)
 
 data class FlashToolState(
     val stage: FlashStage = FlashStage.IDLE,
@@ -55,7 +65,8 @@ data class FlashToolState(
     val folderDaCandidates: List<FolderFirmwareSearch.DaCandidate> = emptyList(),
     val folderPreloaderCandidates: List<FolderFirmwareSearch.PreloaderCandidate> = emptyList(),
     val folderScanInfo: String? = null,
-    val gptEntries: List<GptParser.Entry> = emptyList()
+    val gptEntries: List<GptParser.Entry> = emptyList(),
+    val writePending: WritePending? = null
 )
 
 /**
@@ -698,6 +709,101 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                     }
                     is XFlashProtocol.XResult.Error -> {
                         log.add("FlashTool", "Baca GPT", "ERROR[${result.stage}]: ${result.message}")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.ERROR,
+                            errorStage = result.stage,
+                            errorMessage = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Tahap 7 (persiapan): pilih gambar untuk ditulis ke satu partisi dari GPT yang sudah terbaca.
+     * Ini BARU memvalidasi ukuran dan menyiapkan konfirmasi — BELUM menulis apa pun ke device.
+     * Kalau ukuran file melebihi ukuran partisi, [WritePending.fitsInPartition] = false dan UI
+     * WAJIB memblokir tombol konfirmasi (menulis lebih dari ukuran partisi bisa menimpa partisi
+     * tetangganya — risiko brick klasik).
+     */
+    fun pickImageForPartition(partitionName: String, uri: Uri) {
+        val entry = _state.value.gptEntries.firstOrNull { it.name == partitionName }
+        if (entry == null) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "write_no_partition",
+                errorMessage = "Partisi \"$partitionName\" tidak ketemu di hasil baca GPT terakhir."
+            )
+            return
+        }
+        val size = try {
+            ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        } catch (t: Throwable) { -1L }
+        if (size < 0) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "write_file_size",
+                errorMessage = "Gagal membaca ukuran file gambar yang dipilih."
+            )
+            return
+        }
+        _state.value = _state.value.copy(
+            writePending = WritePending(
+                partitionName = partitionName,
+                entry = entry,
+                imageUri = uri,
+                imageSize = size,
+                fitsInPartition = size <= entry.sizeBytes
+            )
+        )
+    }
+
+    fun cancelWrite() {
+        _state.value = _state.value.copy(writePending = null)
+    }
+
+    /**
+     * Eksekusi tulis sungguhan — hanya boleh dipanggil setelah pengguna konfirmasi eksplisit di UI,
+     * dan hanya jalan kalau [WritePending.fitsInPartition] true. Ini MENULIS KE PENYIMPANAN PERMANEN.
+     */
+    fun confirmWrite() {
+        val sess = session
+        val pending = _state.value.writePending
+        if (sess == null || pending == null || !pending.fitsInPartition || _state.value.stage != FlashStage.GPT_READY) {
+            _state.value = _state.value.copy(
+                stage = FlashStage.ERROR,
+                errorStage = "write_not_ready",
+                errorMessage = "Kondisi untuk menulis belum terpenuhi (GPT belum terbaca / ukuran tidak cocok / belum dikonfirmasi)."
+            )
+            return
+        }
+        _state.value = _state.value.copy(stage = FlashStage.WRITING, writePending = null, errorStage = null, errorMessage = null)
+        scope.launch {
+            val bytes = try {
+                ctx.contentResolver.openInputStream(pending.imageUri)?.use { it.readBytes() }
+            } catch (t: Throwable) { null }
+            if (bytes == null) {
+                postDaError(sess, "write_read_image", "Gagal membaca file gambar untuk partisi \"${pending.partitionName}\".")
+                return@launch
+            }
+            val addr = pending.entry.firstLba * 512L
+            val result = try {
+                XFlashProtocol.writeData(sess.conn, sess.intf, XFlashProtocol.STORAGE_EMMC, XFlashProtocol.PARTTYPE_USER, addr, bytes)
+            } catch (t: Throwable) {
+                XFlashProtocol.XResult.Error("exception", t.message ?: t.toString())
+            }
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is XFlashProtocol.XResult.Ok -> {
+                        log.add("FlashTool", "Tulis partisi ${pending.partitionName}", "OK: ${bytes.size} byte")
+                        _state.value = _state.value.copy(
+                            stage = FlashStage.WRITE_DONE,
+                            info = "Selesai menulis ${bytes.size} byte ke partisi \"${pending.partitionName}\"."
+                        )
+                    }
+                    is XFlashProtocol.XResult.Error -> {
+                        log.add("FlashTool", "Tulis partisi ${pending.partitionName}", "ERROR[${result.stage}]: ${result.message}")
                         _state.value = _state.value.copy(
                             stage = FlashStage.ERROR,
                             errorStage = result.stage,

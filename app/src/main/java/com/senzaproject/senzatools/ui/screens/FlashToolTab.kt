@@ -23,6 +23,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.senzaproject.senzatools.di.ServiceLocator
@@ -58,6 +61,11 @@ fun FlashToolTab(s: ServiceLocator) {
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) s.flashTool.searchFolder(uri)
     }
+    var writeTargetPartition by rememberSaveable { mutableStateOf<String?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val part = writeTargetPartition
+        if (uri != null && part != null) s.flashTool.pickImageForPartition(part, uri)
+    }
 
     DisposableEffect(Unit) { onDispose { s.flashTool.dispose() } }
 
@@ -83,11 +91,14 @@ fun FlashToolTab(s: ServiceLocator) {
                     FlashStage.DA2_READY -> "DA2 siap"
                     FlashStage.GPT_READING -> "Membaca GPT…"
                     FlashStage.GPT_READY -> "GPT terbaca"
+                    FlashStage.WRITING -> "Menulis partisi…"
+                    FlashStage.WRITE_DONE -> "Tulis selesai"
                     FlashStage.ERROR -> "Error"
                 },
                 when (st.stage) {
                     FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY, FlashStage.GPT_READY -> g.good
+                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY, FlashStage.GPT_READY, FlashStage.WRITE_DONE -> g.good
+                    FlashStage.WRITING -> g.warn
                     FlashStage.ERROR -> g.bad
                     FlashStage.IDLE -> g.textDim
                     else -> g.warn
@@ -383,7 +394,56 @@ fun FlashToolTab(s: ServiceLocator) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Caption(p.name)
                         Caption(ScatterFile.formatSize(p.sizeBytes))
+                        GlassButton("Tulis ke sini", {
+                            writeTargetPartition = p.name
+                            imagePicker.launch(arrayOf("*/*"))
+                        })
                     }
+                }
+            }
+        }
+    }
+
+    if (st.stage == FlashStage.GPT_READY || st.stage == FlashStage.WRITING || st.stage == FlashStage.WRITE_DONE) {
+        GlassCard {
+            Heading("Tahap 7 — Tulis partisi tunggal")
+            Body(
+                "MENULIS KE PENYIMPANAN PERMANEN. Pilih file dari daftar partisi Tahap 6 lewat tombol " +
+                    "\"Tulis ke sini\". File yang lebih besar dari ukuran partisi akan DIBLOKIR otomatis — " +
+                    "menulis melebihi batas partisi bisa menimpa partisi tetangganya.",
+                dim = true
+            )
+            when (st.stage) {
+                FlashStage.WRITING -> Body("Sedang menulis… jangan cabut kabel USB.", color = g.warn)
+                FlashStage.WRITE_DONE -> Body(st.info ?: "Tulis selesai.", color = g.good)
+                else -> {}
+            }
+        }
+    }
+
+    val pending = st.writePending
+    if (pending != null) {
+        GlassCard(strong = true) {
+            Heading("Konfirmasi tulis partisi")
+            KeyValue("Partisi", pending.partitionName)
+            KeyValue("Ukuran partisi", ScatterFile.formatSize(pending.entry.sizeBytes))
+            KeyValue("Ukuran file", ScatterFile.formatSize(pending.imageSize))
+            if (!pending.fitsInPartition) {
+                Body(
+                    "DIBLOKIR: file ini lebih besar dari partisi tujuan. Tidak bisa dilanjutkan — " +
+                        "pastikan ini file yang benar untuk partisi \"${pending.partitionName}\".",
+                    color = g.bad
+                )
+                GlassButton("Batal", { s.flashTool.cancelWrite() })
+            } else {
+                Body(
+                    "Tindakan ini tidak bisa dibatalkan setelah dimulai. Pastikan ini file yang benar " +
+                        "untuk partisi \"${pending.partitionName}\" sebelum lanjut.",
+                    color = g.warn
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GlassButton("Batal", { s.flashTool.cancelWrite() })
+                    GlassButton("Ya, Tulis Sekarang", { s.flashTool.confirmWrite() }, primary = true)
                 }
             }
         }

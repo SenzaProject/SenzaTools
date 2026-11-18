@@ -26,12 +26,14 @@ object XFlashProtocol {
 
     private const val MAGIC = 0xFEEEEEEF.toInt()
     private const val TIMEOUT_MS = 5000
+    private const val CHUNK_SIZE = 1024
 
     // Command top-level XFlash yang NILAINYA SUDAH TERKONFIRMASI dari source tool sejenis
     // (bukan dugaan): WRITE_DATA=0x010004, READ_DATA=0x010005, FORMAT_PARTITION=0x010006,
     // SHUTDOWN=0x010007, BOOT_TO=0x010008 (cocok dengan yang sudah dipakai Tahap 5),
     // DEVICE_CTRL=0x010009 (wrapper untuk sub-command seperti GET_DA_VERSION), INIT_EXT_RAM=0x01000A.
     private const val CMD_DEVICE_CTRL = 0x010009
+    private const val CMD_WRITE_DATA = 0x010004
     private const val CMD_READ_DATA = 0x010005
     private const val CMD_GET_DA_VERSION = 0x040005
     private const val CMD_GET_PACKET_LENGTH = 0x040007
@@ -212,6 +214,62 @@ object XFlashProtocol {
             return XResult.Error("read_data_final_status", "DA membalas status error (0x${fStatus.toString(16)}) setelah data selesai dikirim", finalStatus.third)
         }
         return XResult.Ok(out)
+    }
+
+    /**
+     * Tulis data ke storage lewat command WRITE_DATA (0x010004) — kebalikan dari readData, format
+     * parameter sama (storage, parttype, addr, size). Dipakai untuk flash partisi tunggal.
+     *
+     * CATATAN JUJUR: opcode terkonfirmasi dari sumber yang sama dengan READ_DATA. Format parameter
+     * saya samakan dengan READ_DATA karena keduanya top-level command sejenis di library yang sama
+     * — pola yang masuk akal, bukan tebakan sembarangan, tapi tetap belum pernah divalidasi langsung
+     * ke device nyata untuk arah tulis. INI MENULIS KE PENYIMPANAN PERMANEN — tidak ada jaring
+     * pengaman protokol di level ini; validasi ukuran & konfirmasi pengguna WAJIB di lapisan atas
+     * (lihat FlashToolEngine) sebelum fungsi ini dipanggil.
+     */
+    fun writeData(conn: UsbDeviceConnection, intf: UsbInterface, storage: Int, parttype: Int, addr: Long, data: ByteArray): XResult {
+        val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+
+        val cmdEcho = sendAndEcho(conn, eps, CMD_WRITE_DATA, "write_data_cmd")
+        if (cmdEcho is XResult.Error) return cmdEcho
+
+        val statusBefore = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("write_data_precheck_timeout", "Tidak ada status dari DA setelah command WRITE_DATA")
+        val preStatus = if (statusBefore.third.size >= 4)
+            ByteBuffer.wrap(statusBefore.third).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (preStatus != 0) {
+            return XResult.Error("write_data_rejected", "DA menolak command WRITE_DATA (status 0x${preStatus.toString(16)})", statusBefore.third)
+        }
+
+        val param = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(storage).putInt(parttype).putLong(addr).putLong(data.size.toLong()).array()
+        if (!sendPacket(conn, eps.out, 1, param)) {
+            return XResult.Error("write_data_param_send", "Gagal mengirim parameter WRITE_DATA (storage/parttype/addr/size)")
+        }
+        val paramEcho = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("write_data_param_echo_timeout", "DA tidak membalas setelah parameter WRITE_DATA dikirim")
+        if (paramEcho.first != MAGIC) {
+            return XResult.Error("write_data_param_bad_magic", "Balasan parameter WRITE_DATA tidak valid", paramEcho.third)
+        }
+
+        var off = 0
+        while (off < data.size) {
+            val len = minOf(CHUNK_SIZE, data.size - off)
+            val chunk = data.copyOfRange(off, off + len)
+            if (!sendPacket(conn, eps.out, 1, chunk)) {
+                return XResult.Error("write_data_chunk_send", "Gagal mengirim blok data pada offset $off dari ${data.size}")
+            }
+            off += len
+        }
+
+        val finalStatus = recvPacket(conn, eps.`in`)
+            ?: return XResult.Error("write_data_final_timeout", "Tidak ada status akhir dari DA setelah semua data dikirim — JANGAN anggap tulis berhasil.")
+        val fStatus = if (finalStatus.third.size >= 4)
+            ByteBuffer.wrap(finalStatus.third).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (fStatus != 0) {
+            return XResult.Error("write_data_final_status", "DA membalas status error (0x${fStatus.toString(16)}) setelah data ditulis", finalStatus.third)
+        }
+        return XResult.Ok(finalStatus.third)
     }
 
     /**
