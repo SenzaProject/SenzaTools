@@ -31,7 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val TABS = listOf("Akses", "Shell & ADB", "Monitor", "Performa", "Flash Tool", "Log")
+private val TABS = listOf("Akses", "Shell & ADB", "Monitor", "Performa", "Flash Tool", "Flash ROM", "Log")
 
 @Composable
 fun ToolsScreen(s: ServiceLocator) {
@@ -44,6 +44,7 @@ fun ToolsScreen(s: ServiceLocator) {
             2 -> MonitorTab(s)
             3 -> PerfTab(s)
             4 -> FlashToolTab(s)
+            5 -> RomFlashTab(s)
             else -> LogTab(s)
         }
     }

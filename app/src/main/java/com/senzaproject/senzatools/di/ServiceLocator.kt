@@ -36,6 +36,7 @@ class ServiceLocator(val app: Application) {
     val kernel by lazy { com.senzaproject.senzatools.kernel.KernelEngine(app, access, com.senzaproject.senzatools.kernel.KernelStore(app)) }
     val uiPrefs by lazy { UiPrefs(app) }
     val flashTool by lazy { com.senzaproject.senzatools.platform.flashtool.FlashToolEngine(app, operationLog) }
+    val romFlash by lazy { com.senzaproject.senzatools.platform.romflash.RomFlashEngine(app, access) }
     val session = SessionContext()
 }
 
