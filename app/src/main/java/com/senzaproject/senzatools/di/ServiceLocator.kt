@@ -22,7 +22,6 @@ class ServiceLocator(val app: Application) {
     val batteryHealth by lazy { com.senzaproject.senzatools.data.BatteryHealthReader(app, access) }
     val editor by lazy { com.senzaproject.senzatools.platform.root.RootEditor(app, access, operationLog) }
     val perf by lazy { com.senzaproject.senzatools.platform.root.PerfTuner(app, access) }
-    val updates by lazy { com.senzaproject.senzatools.update.UpdateChecker(app) }
     val display by lazy { com.senzaproject.senzatools.platform.root.DisplayTuner(app, access) }
     val booster by lazy { com.senzaproject.senzatools.platform.root.Booster(app, access) }
     val dns by lazy { com.senzaproject.senzatools.platform.root.DnsTuner(app, access) }

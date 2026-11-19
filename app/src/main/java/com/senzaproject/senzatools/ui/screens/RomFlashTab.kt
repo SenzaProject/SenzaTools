@@ -42,19 +42,14 @@ fun RomFlashTab(s: ServiceLocator) {
     }
 
     GlassCard(strong = true) {
-        Heading("Flash ROM — via Root (bukan BROM)")
+        Heading("Flash ROM")
         Body(
-            "Flash partisi HANYA ke slot yang sedang TIDAK aktif — slot yang sedang berjalan sekarang " +
-                "tidak pernah disentuh sama sekali. Ini jaring pengaman utamanya: kalau ROM baru gagal " +
-                "boot, slot lama tetap utuh dan bisa dipakai lagi. \"Auto-fallback ke recovery\" TIDAK " +
-                "diimplementasikan sebagai kode aplikasi — itu bergantung pada mekanisme bootloader A/B " +
-                "bawaan Android, bukan sesuatu yang bisa dijamin dari sisi apk.",
+            "Flash hanya ke slot yang tidak aktif. Slot yang sedang dipakai tidak disentuh, " +
+                "jadi kalau ROM baru gagal boot, slot lama tetap aman.",
             dim = true
         )
-        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-            KeyValue("Slot aktif sekarang", st.currentSlot?.let { "_$it" } ?: "-")
-            KeyValue("Slot target flash", st.targetSlot?.let { "_$it" } ?: "-")
-        }
+        KeyValue("Slot aktif sekarang", st.currentSlot?.let { "_$it" } ?: "-")
+        KeyValue("Slot target flash", st.targetSlot?.let { "_$it" } ?: "-")
         GlassButton(
             if (st.stage == RomFlashEngine.Stage.DETECTING) "Mendeteksi…" else "Deteksi Slot & Partisi",
             { scope.launch { s.romFlash.detectSlot() } },

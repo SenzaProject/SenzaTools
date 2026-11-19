@@ -20,7 +20,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import com.senzaproject.senzatools.i18n.Lang
-import com.senzaproject.senzatools.update.UpdateState
 
 @Composable
 fun SettingsScreen(s: ServiceLocator, onBack: () -> Unit = {}) {
@@ -53,7 +52,7 @@ fun SettingsScreen(s: ServiceLocator, onBack: () -> Unit = {}) {
 
         GlassCard {
             Heading("Privasi & data")
-            Caption("Semua analisis berjalan di perangkat. Tidak ada telemetri, iklan, atau akun. Jaringan keluar hanya untuk cek pembaruan ke GitHub dan tes jaringan yang kamu jalankan.")
+            Caption("Semua analisis berjalan di perangkat. Tidak ada telemetri, iklan, atau akun. Jaringan keluar hanya untuk tes jaringan yang kamu jalankan.")
             KeyValue("Cache analisis", cacheSize.formatBytes())
             GlassButton("Bersihkan cache", {
                 Saf.clearCache(ctx)
@@ -61,47 +60,12 @@ fun SettingsScreen(s: ServiceLocator, onBack: () -> Unit = {}) {
             })
         }
 
-        UpdateCard(s)
-
         GlassCard {
             Heading("Tentang")
             KeyValue("Versi", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             KeyValue("Build CI", if (BuildConfig.BUILD_NUMBER > 0) "#${BuildConfig.BUILD_NUMBER}" else "Build lokal")
             KeyValue("Pengembang", "SenzaProject")
             KeyValue("Perangkat", "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
-        }
-    }
-}
-
-@Composable
-private fun UpdateCard(s: ServiceLocator) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val st = s.updates.state
-    var busy by remember { mutableStateOf(false) }
-    GlassCard {
-        Heading("Pembaruan")
-        KeyValue(
-            "Status",
-            when (st) {
-                is UpdateState.UpToDate -> "Sudah versi terbaru"
-                is UpdateState.DevBuild -> "Build lokal (tanpa pemeriksaan)"
-                is UpdateState.Checking -> "Memeriksa…"
-                is UpdateState.Required -> "Ada build baru #${st.latest.runNumber}"
-                is UpdateState.Unknown -> "Tidak bisa memeriksa: ${st.reason}"
-                is UpdateState.Idle -> "Belum diperiksa"
-            }
-        )
-        Caption("Sumber: GitHub Actions SenzaProject/SenzaTools.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassButton(if (busy) "Memeriksa…" else "Periksa pembaruan", {
-                scope.launch {
-                    busy = true
-                    s.updates.check()
-                    busy = false
-                }
-            }, enabled = !busy && BuildConfig.BUILD_NUMBER > 0)
-            GlassButton("Buka halaman build", { openUpdatePage(ctx, BuildConfig.UPDATE_PAGE) })
         }
     }
 }

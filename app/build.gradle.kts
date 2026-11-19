@@ -20,12 +20,6 @@ android {
         versionName = "1.2.0"
 
         buildConfigField("int", "BUILD_NUMBER", "$ciRunNumber")
-        // Sumber update: run sukses terbaru workflow "Build APK" di branch main (API publik GitHub).
-        buildConfigField(
-            "String", "UPDATE_API",
-            "\"https://api.github.com/repos/SenzaProject/SenzaTools/actions/workflows/build-apk.yml/runs?branch=main&status=success&per_page=1\""
-        )
-        buildConfigField("String", "UPDATE_PAGE", "\"https://github.com/SenzaProject/SenzaTools/actions\"")
     }
 
     // Tanda tangan tetap. Runner GitHub membuat debug key baru di tiap build, sehingga APK dari run berbeda

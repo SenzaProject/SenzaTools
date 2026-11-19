@@ -30,7 +30,6 @@ import com.senzaproject.senzatools.ui.screens.DeviceScreen
 import com.senzaproject.senzatools.ui.screens.HomeScreen
 import com.senzaproject.senzatools.ui.screens.SettingsScreen
 import com.senzaproject.senzatools.ui.screens.ToolsScreen
-import com.senzaproject.senzatools.ui.screens.UpdateGate
 import com.senzaproject.senzatools.ui.screens.UtilitiesScreen
 import com.senzaproject.senzatools.ui.theme.SenzaTheme
 
@@ -46,7 +45,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalServices provides services) {
                 SenzaTheme(services.uiPrefs.themeMode) {
-                    UpdateGate(services) { SenzaRoot(services) }
+                    SenzaRoot(services)
                 }
             }
         }
