@@ -69,44 +69,6 @@ fun FlashToolTab(s: ServiceLocator) {
 
     DisposableEffect(Unit) { onDispose { s.flashTool.dispose() } }
 
-    GlassCard(strong = true) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Heading("Flash Tool — Tahap 1+2: BROM & DA")
-            StatusPill(
-                when (st.stage) {
-                    FlashStage.IDLE -> "Siap"
-                    FlashStage.WAITING_DEVICE -> "Memindai…"
-                    FlashStage.PERMISSION_NEEDED -> "Menunggu izin USB"
-                    FlashStage.HANDSHAKING -> "Handshake…"
-                    FlashStage.IDENTIFIED -> "Teridentifikasi"
-                    FlashStage.DA_PARSING -> "Membaca file DA…"
-                    FlashStage.DA_MATCHED -> "DA cocok"
-                    FlashStage.DA_SENDING -> "Mengirim DA…"
-                    FlashStage.DA_READY -> "DA siap"
-                    FlashStage.XFLASH_SYNCING -> "Buka kanal XFlash…"
-                    FlashStage.XFLASH_READY -> "Kanal XFlash siap"
-                    FlashStage.EMI_SENDING -> "Mengirim EMI…"
-                    FlashStage.EMI_ACCEPTED -> "EMI diterima"
-                    FlashStage.DA2_SENDING -> "Upload DA2…"
-                    FlashStage.DA2_READY -> "DA2 siap"
-                    FlashStage.GPT_READING -> "Membaca GPT…"
-                    FlashStage.GPT_READY -> "GPT terbaca"
-                    FlashStage.WRITING -> "Menulis partisi…"
-                    FlashStage.WRITE_DONE -> "Tulis selesai"
-                    FlashStage.ERROR -> "Error"
-                },
-                when (st.stage) {
-                    FlashStage.IDENTIFIED, FlashStage.DA_MATCHED -> g.good
-                    FlashStage.DA_READY, FlashStage.XFLASH_READY, FlashStage.EMI_ACCEPTED, FlashStage.DA2_READY, FlashStage.GPT_READY, FlashStage.WRITE_DONE -> g.good
-                    FlashStage.WRITING -> g.warn
-                    FlashStage.ERROR -> g.bad
-                    FlashStage.IDLE -> g.textDim
-                    else -> g.warn
-                }
-            )
-        }
-    }
-
     GlassCard {
         Heading("Cara masuk mode BROM")
         Body(
