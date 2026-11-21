@@ -84,11 +84,38 @@ object BromProtocol {
         return n == data.size
     }
 
+    /** Sisa byte dari paket USB yang lebih besar dari yang diminta pembaca sebelumnya. */
+    private var pendingRx = ByteArray(0)
+
+    /**
+     * Baca TEPAT [len] byte. BROM mengirim balasan sebagai beberapa paket USB terpisah (mis. echo opcode
+     * 1 byte, lalu 2 byte HW code, lalu 2 byte status), sedangkan satu bulkTransfer hanya mengembalikan
+     * paket pertama. Kode lama membaca sekali saja sehingga tiap balasan multi-byte dianggap "tidak
+     * sesuai format". Sekarang paket dikumpulkan sampai [len] byte terpenuhi atau waktu ([TIMEOUT_MS])
+     * habis; kalau kurang, byte yang sudah terkumpul tetap dikembalikan supaya bisa ditampilkan di log.
+     */
     private fun read(conn: UsbDeviceConnection, ep: UsbEndpoint, len: Int): ByteArray? {
-        val buf = ByteArray(len)
-        val n = conn.bulkTransfer(ep, buf, len, TIMEOUT_MS)
-        if (n <= 0) return null
-        return buf.copyOf(n)
+        val out = ByteArray(len)
+        var got = 0
+        if (pendingRx.isNotEmpty()) {
+            val take = minOf(pendingRx.size, len)
+            System.arraycopy(pendingRx, 0, out, 0, take)
+            pendingRx = pendingRx.copyOfRange(take, pendingRx.size)
+            got = take
+        }
+        val deadline = System.currentTimeMillis() + TIMEOUT_MS
+        val buf = ByteArray(maxOf(64, ep.maxPacketSize))
+        while (got < len) {
+            val left = (deadline - System.currentTimeMillis()).toInt()
+            if (left <= 0) break
+            val n = conn.bulkTransfer(ep, buf, buf.size, left)
+            if (n <= 0) break
+            val take = minOf(n, len - got)
+            System.arraycopy(buf, 0, out, got, take)
+            got += take
+            if (n > take) pendingRx += buf.copyOfRange(take, n)
+        }
+        return if (got == 0) null else out.copyOf(got)
     }
 
     /**
@@ -106,6 +133,7 @@ object BromProtocol {
         // 1) Handshake klasik. Jendela BROM/Preloader sangat singkat, jadi 0xA0 dikirim BERULANG
         //    dengan timeout pendek sampai device membalas 0x5F (cara kerja tool flash lain).
         //    Kode lama cuma coba sekali dengan timeout 3 detik -> jendela keburu lewat -> gagal.
+        pendingRx = ByteArray(0)
         while (readT(conn, eps.`in`, 10) != null) { /* buang sisa data lama */ }
         val deadline = System.currentTimeMillis() + HANDSHAKE_WINDOW_MS
         var synced = false
@@ -252,6 +280,7 @@ object BromProtocol {
     fun sendAndRunDa(conn: UsbDeviceConnection, intf: UsbInterface, payload: ByteArray, region: DaFile.DaRegion): DaResult {
         val eps = findBulkEndpoints(intf)
             ?: return DaResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan")
+        pendingRx = ByteArray(0)
 
         // 1) CMD_SEND_DA: opcode + address + length + sig_length, masing-masing di-echo device.
         if (!write(conn, eps.out, byteArrayOf(CMD_SEND_DA.toByte()))) {

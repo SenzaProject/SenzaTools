@@ -77,12 +77,9 @@ object XFlashProtocol {
     private fun write(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint, data: ByteArray): Boolean =
         conn.bulkTransfer(ep, data, data.size, TIMEOUT_MS) == data.size
 
-    private fun read(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint, len: Int): ByteArray? {
-        val buf = ByteArray(len)
-        val n = conn.bulkTransfer(ep, buf, len, TIMEOUT_MS)
-        if (n <= 0) return null
-        return buf.copyOf(n)
-    }
+    /** Baca tepat [len] byte (mengumpulkan beberapa paket USB); null kalau device berhenti membalas. */
+    private fun read(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint, len: Int): ByteArray? =
+        readExact(conn, ep, len)
 
     /** Kirim satu paket framed (header 12 byte + payload) lewat bulk OUT. */
     private fun sendPacket(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint, dataType: Int, payload: ByteArray): Boolean {
