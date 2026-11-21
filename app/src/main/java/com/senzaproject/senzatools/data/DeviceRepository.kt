@@ -566,7 +566,7 @@ class DeviceRepository(private val ctx: Context) {
         return listOf(
             InfoSection(
                 "Layar", listOf(
-                    InfoRow("Resolusi", "${b.width()} × ${b.height()} px"),
+                    InfoRow("Resolusi", "${bw} × ${bh} px"),
                     InfoRow("Densitas", "${metrics.densityDpi} dpi (skala ${metrics.density})"),
                     InfoRow("xdpi / ydpi", "${metrics.xdpi.f1()} / ${metrics.ydpi.f1()}"),
                     InfoRow("Ukuran diagonal", inches?.let { "${it.f1()} inci" } ?: na),
