@@ -1,6 +1,7 @@
 package com.senzaproject.senzatools.platform.flashtool
 
 import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
@@ -52,6 +53,32 @@ object BromProtocol {
         return if (out != null && inn != null) Endpoints(out, inn) else null
     }
 
+    /**
+     * MediaTek BROM/Preloader tampil sebagai CDC-ACM: interface 0 = CDC control (cuma endpoint
+     * interrupt, TANPA bulk), interface 1 = CDC data (bulk IN+OUT). Kode lama selalu ambil
+     * interface 0 sehingga endpoint bulk tidak pernah ketemu. Fungsi ini memilih interface
+     * yang benar-benar punya bulk IN+OUT.
+     */
+    fun findBulkInterface(device: UsbDevice): UsbInterface? {
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            if (findBulkEndpoints(intf) != null) return intf
+        }
+        return null
+    }
+
+    private const val PROBE_TIMEOUT_MS = 100
+    private const val HANDSHAKE_WINDOW_MS = 20_000L
+
+    private fun writeT(conn: UsbDeviceConnection, ep: UsbEndpoint, data: ByteArray, timeout: Int): Boolean =
+        conn.bulkTransfer(ep, data, data.size, timeout) == data.size
+
+    private fun readT(conn: UsbDeviceConnection, ep: UsbEndpoint, timeout: Int): ByteArray? {
+        val buf = ByteArray(64)
+        val n = conn.bulkTransfer(ep, buf, buf.size, timeout)
+        return if (n > 0) buf.copyOf(n) else null
+    }
+
     private fun write(conn: UsbDeviceConnection, ep: UsbEndpoint, data: ByteArray): Boolean {
         val n = conn.bulkTransfer(ep, data, data.size, TIMEOUT_MS)
         return n == data.size
@@ -76,17 +103,52 @@ object BromProtocol {
         val eps = findBulkEndpoints(intf)
             ?: return BromResult.Error("endpoints", "Interface USB device ini tidak punya endpoint bulk IN+OUT yang sesuai pola BROM")
 
-        // 1) Handshake klasik: kirim A0 0A 50 05 satu-per-satu, device harus membalas inversinya.
+        // 1) Handshake klasik. Jendela BROM/Preloader sangat singkat, jadi 0xA0 dikirim BERULANG
+        //    dengan timeout pendek sampai device membalas 0x5F (cara kerja tool flash lain).
+        //    Kode lama cuma coba sekali dengan timeout 3 detik -> jendela keburu lewat -> gagal.
+        while (readT(conn, eps.`in`, 10) != null) { /* buang sisa data lama */ }
+        val deadline = System.currentTimeMillis() + HANDSHAKE_WINDOW_MS
+        var synced = false
+        var lastRaw: ByteArray? = null
+        var writeFails = 0
+        while (System.currentTimeMillis() < deadline) {
+            if (!writeT(conn, eps.out, byteArrayOf(0xA0.toByte()), PROBE_TIMEOUT_MS)) {
+                writeFails++
+                Thread.sleep(20)
+                continue
+            }
+            val r = readT(conn, eps.`in`, PROBE_TIMEOUT_MS)
+            if (r != null) {
+                if (r[0] == 0x5F.toByte()) { synced = true; break }
+                lastRaw = r
+            }
+            Thread.sleep(10)
+        }
+        if (!synced) {
+            return if (lastRaw == null && writeFails > 0 && writeFails > 20) {
+                BromResult.Error("handshake_write", "Device tidak menerima tulis USB selama ${HANDSHAKE_WINDOW_MS / 1000} detik (kemungkinan device sudah lepas dari mode BROM).")
+            } else {
+                BromResult.Error(
+                    "handshake_read",
+                    "Tidak ada balasan 0x5F selama ${HANDSHAKE_WINDOW_MS / 1000} detik. Device belum/tidak lagi di mode BROM — " +
+                        "colok ulang dengan kombinasi tombol, tool akan mencoba lagi otomatis.",
+                    lastRaw
+                )
+            }
+        }
+
+        // Sisa 3 byte handshake: 0x0A->0xF5, 0x50->0xAF, 0x05->0xFA
         val probe = byteArrayOf(0xA0.toByte(), 0x0A, 0x50, 0x05)
         val expectedEcho = byteArrayOf(0x5F, 0xF5.toByte(), 0xAF.toByte(), 0xFA.toByte())
         val echoed = ByteArray(4)
-        for (i in probe.indices) {
+        echoed[0] = 0x5F
+        for (i in 1 until probe.size) {
             if (!write(conn, eps.out, byteArrayOf(probe[i]))) {
                 return BromResult.Error("handshake_write", "Gagal mengirim byte handshake ke-${i + 1} (device tidak merespons tulis USB)")
             }
             val r = read(conn, eps.`in`, 1)
             if (r == null || r.isEmpty()) {
-                return BromResult.Error("handshake_read", "Tidak ada balasan untuk byte handshake ke-${i + 1}. Device mungkin belum benar-benar di mode BROM.")
+                return BromResult.Error("handshake_read", "Tidak ada balasan untuk byte handshake ke-${i + 1}. Device mungkin keluar dari mode BROM di tengah handshake.")
             }
             echoed[i] = r[0]
         }
@@ -165,6 +227,18 @@ object BromProtocol {
         return sum
     }
 
+    private fun bromXorChecksum(data: ByteArray, littleEndian: Boolean): Int {
+        var x = 0
+        var i = 0
+        while (i < data.size) {
+            val a = data[i].toInt() and 0xFF
+            val b = if (i + 1 < data.size) data[i + 1].toInt() and 0xFF else 0
+            x = x xor (if (littleEndian) (b shl 8) or a else (a shl 8) or b)
+            i += 2
+        }
+        return x and 0xFFFF
+    }
+
     /**
      * Kirim payload DA1 ke alamat SRAM lewat CMD_SEND_DA, lalu CMD_JUMP_DA untuk mengeksekusinya,
      * lalu tunggu byte sinkronisasi 0xC0 dari DA sebagai bukti DA benar-benar jalan.
@@ -223,7 +297,12 @@ object BromProtocol {
         }
         val deviceChecksum = ((checksumResp[0].toInt() and 0xFF) shl 8) or (checksumResp[1].toInt() and 0xFF)
         val localChecksum = bromChecksum(payload)
-        if (deviceChecksum != localChecksum) {
+        // BROM MediaTek menghitung checksum dengan XOR word 16-bit (bukan penjumlahan) dan banyak
+        // chip membalas 0 (= tidak dicek). Terima semua varian yang sah supaya DA tidak ditolak palsu.
+        val xorLe = bromXorChecksum(payload, littleEndian = true)
+        val xorBe = bromXorChecksum(payload, littleEndian = false)
+        val checksumOk = deviceChecksum == 0 || deviceChecksum == xorLe || deviceChecksum == xorBe || deviceChecksum == localChecksum
+        if (!checksumOk) {
             return DaResult.Error(
                 "send_da_checksum_mismatch",
                 "Checksum tidak cocok (device: 0x${deviceChecksum.toString(16)}, dihitung lokal: 0x${localChecksum.toString(16)}). " +

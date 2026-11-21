@@ -217,6 +217,100 @@ object XFlashProtocol {
     }
 
     /**
+     * Varian streaming dari [readData] untuk partisi besar (backup): langkah protokolnya SAMA PERSIS
+     * (READ_DATA -> status -> parameter 24 byte -> paket data -> status akhir), bedanya data tidak
+     * ditampung di satu ByteArray, melainkan diserahkan ke [sink] per paket, dan tiap paket dibaca
+     * sampai tuntas ([recvPacketExact]) supaya tidak desinkron kalau bulkTransfer mengembalikan
+     * data sebagian. [shouldCancel] dicek tiap paket; kalau true, baca dihentikan dengan error
+     * "read_data_cancelled" (read-only, aman dibatalkan).
+     *
+     * CATATAN JUJUR: asumsi protokol (parttype, storage, tanpa ack per paket) sama dengan readData
+     * dan belum divalidasi di device nyata pada baca multi-paket. Kalau DA ternyata menuntut ack per
+     * paket, gejalanya timeout di "read_data_chunk_timeout" — bukan data palsu, karena jumlah byte dicek.
+     */
+    fun readDataStream(
+        conn: UsbDeviceConnection, intf: UsbInterface, storage: Int, parttype: Int, addr: Long, size: Long,
+        shouldCancel: () -> Boolean = { false },
+        sink: (ByteArray, Int) -> Unit
+    ): XResult {
+        val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
+
+        val cmdEcho = sendAndEcho(conn, eps, CMD_READ_DATA, "read_data_cmd")
+        if (cmdEcho is XResult.Error) return cmdEcho
+
+        val statusBefore = recvPacketExact(conn, eps.`in`)
+            ?: return XResult.Error("read_data_precheck_timeout", "Tidak ada status dari DA setelah command READ_DATA")
+        val preStatus = if (statusBefore.third.size >= 4)
+            ByteBuffer.wrap(statusBefore.third).order(ByteOrder.LITTLE_ENDIAN).int else -1
+        if (preStatus != 0) {
+            return XResult.Error("read_data_rejected", "DA menolak command READ_DATA (status 0x${preStatus.toString(16)})", statusBefore.third)
+        }
+
+        val param = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(storage).putInt(parttype).putLong(addr).putLong(size).array()
+        if (!sendPacket(conn, eps.out, 1, param)) {
+            return XResult.Error("read_data_param_send", "Gagal mengirim parameter READ_DATA (storage/parttype/addr/size)")
+        }
+        val paramEcho = recvPacketExact(conn, eps.`in`)
+            ?: return XResult.Error("read_data_param_echo_timeout", "DA tidak membalas setelah parameter READ_DATA dikirim")
+        if (paramEcho.first != MAGIC) {
+            return XResult.Error("read_data_param_bad_magic", "Balasan parameter READ_DATA tidak valid", paramEcho.third)
+        }
+
+        var received = 0L
+        while (received < size) {
+            if (shouldCancel()) {
+                return XResult.Error("read_data_cancelled", "Dibatalkan pengguna (baru $received dari $size byte terbaca).")
+            }
+            val chunkPkt = recvPacketExact(conn, eps.`in`)
+                ?: return XResult.Error("read_data_chunk_timeout", "Koneksi terputus saat membaca data (baru $received dari $size byte)")
+            if (chunkPkt.first != MAGIC) {
+                return XResult.Error("read_data_chunk_bad_magic", "Paket data dari DA tidak valid di tengah pembacaan", chunkPkt.third)
+            }
+            val chunk = chunkPkt.third
+            if (chunk.isEmpty()) break
+            val toUse = minOf(chunk.size.toLong(), size - received).toInt()
+            sink(chunk, toUse)
+            received += toUse
+        }
+        if (received < size) {
+            return XResult.Error("read_data_incomplete", "Data yang diterima ($received byte) lebih sedikit dari yang diminta ($size byte).")
+        }
+
+        val finalStatus = recvPacketExact(conn, eps.`in`)
+        val fStatus = if (finalStatus != null && finalStatus.third.size >= 4)
+            ByteBuffer.wrap(finalStatus.third).order(ByteOrder.LITTLE_ENDIAN).int else 0
+        if (finalStatus != null && fStatus != 0) {
+            return XResult.Error("read_data_final_status", "DA membalas status error (0x${fStatus.toString(16)}) setelah data selesai dikirim", finalStatus.third)
+        }
+        return XResult.Ok(ByteArray(0))
+    }
+
+    /** Seperti [read] tapi mengulang sampai tepat [len] byte terkumpul (satu bulkTransfer bisa kembali sebagian). */
+    private fun readExact(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint, len: Int): ByteArray? {
+        val out = ByteArray(len)
+        var got = 0
+        while (got < len) {
+            val buf = ByteArray(minOf(len - got, 1 shl 20))
+            val n = conn.bulkTransfer(ep, buf, buf.size, TIMEOUT_MS)
+            if (n <= 0) return null
+            System.arraycopy(buf, 0, out, got, n)
+            got += n
+        }
+        return out
+    }
+
+    /** Seperti [recvPacket] tapi payload dibaca tuntas sepanjang field length di header. */
+    private fun recvPacketExact(conn: UsbDeviceConnection, ep: android.hardware.usb.UsbEndpoint): Triple<Int, Int, ByteArray>? {
+        val header = readExact(conn, ep, 12) ?: return null
+        val (magic, dataType, length) = unpackHeader(header) ?: return null
+        if (magic != MAGIC) return Triple(magic, dataType, header)
+        if (length < 0 || length > 64 * 1024 * 1024) return null
+        val payload = if (length > 0) (readExact(conn, ep, length) ?: return null) else ByteArray(0)
+        return Triple(magic, dataType, payload)
+    }
+
+    /**
      * Tulis data ke storage lewat command WRITE_DATA (0x010004) — kebalikan dari readData, format
      * parameter sama (storage, parttype, addr, size). Dipakai untuk flash partisi tunggal.
      *
@@ -227,7 +321,10 @@ object XFlashProtocol {
      * pengaman protokol di level ini; validasi ukuran & konfirmasi pengguna WAJIB di lapisan atas
      * (lihat FlashToolEngine) sebelum fungsi ini dipanggil.
      */
-    fun writeData(conn: UsbDeviceConnection, intf: UsbInterface, storage: Int, parttype: Int, addr: Long, data: ByteArray): XResult {
+    fun writeData(
+        conn: UsbDeviceConnection, intf: UsbInterface, storage: Int, parttype: Int, addr: Long, data: ByteArray,
+        onProgress: ((Int) -> Unit)? = null
+    ): XResult {
         val eps = findBulkEndpoints(intf) ?: return XResult.Error("endpoints", "Endpoint bulk USB tidak ditemukan untuk sesi XFlash")
 
         val cmdEcho = sendAndEcho(conn, eps, CMD_WRITE_DATA, "write_data_cmd")
@@ -260,6 +357,7 @@ object XFlashProtocol {
                 return XResult.Error("write_data_chunk_send", "Gagal mengirim blok data pada offset $off dari ${data.size}")
             }
             off += len
+            onProgress?.invoke(off)
         }
 
         val finalStatus = recvPacket(conn, eps.`in`)

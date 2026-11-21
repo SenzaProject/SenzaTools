@@ -383,6 +383,8 @@ fun FlashToolTab(s: ServiceLocator) {
         }
     }
 
+    ImeiSection(s)
+
     val pending = st.writePending
     if (pending != null) {
         GlassCard(strong = true) {

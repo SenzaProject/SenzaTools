@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * VID MediaTek = 0x0E8D. PID yang umum dipakai perangkat masuk mode Preloader/BROM.
@@ -43,6 +44,14 @@ enum class FlashStage {
     EMI_SENDING, EMI_ACCEPTED, DA2_SENDING, DA2_READY, GPT_READING, GPT_READY,
     WRITING, WRITE_DONE, ERROR
 }
+
+/** Akses I/O eksklusif ke sesi XFlash yang sedang hidup (dipakai fitur Backup/Restore IMEI). */
+class IoHandle(
+    val conn: UsbDeviceConnection,
+    val intf: UsbInterface,
+    val hwCode: Int,
+    val gpt: List<GptParser.Entry>
+)
 
 /** Permintaan tulis partisi yang menunggu konfirmasi eksplisit pengguna — belum ada yang ditulis ke device. */
 data class WritePending(
@@ -109,6 +118,30 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     @Volatile private var selectedAuthBytes: ByteArray? = null
     @Volatile private var selectedPreloaderBytes: ByteArray? = null
     private var pollJob: Job? = null
+    private val ioBusy = AtomicBoolean(false)
+
+    /** Backup/Restore IMEI. */
+    val imei: ImeiEngine by lazy { ImeiEngine(ctx, log, this) }
+
+    /**
+     * Ambil akses eksklusif ke sesi USB untuk operasi baca/tulis partisi. Null kalau sesi belum
+     * sampai tahap GPT, GPT kosong, atau operasi lain masih memegang kunci.
+     */
+    internal fun acquireIo(): IoHandle? {
+        val sess = session ?: return null
+        val st = _state.value
+        if ((st.stage != FlashStage.GPT_READY && st.stage != FlashStage.WRITE_DONE) || st.gptEntries.isEmpty()) return null
+        if (!ioBusy.compareAndSet(false, true)) return null
+        return IoHandle(sess.conn, sess.intf, sess.hwCode, st.gptEntries)
+    }
+
+    internal fun releaseIo() { ioBusy.set(false) }
+
+    private fun blockedByIo(): Boolean {
+        if (!ioBusy.get()) return false
+        _files.update { it.copy(note = "Operasi backup/restore IMEI sedang berjalan — jangan cabut kabel. Tunggu selesai (atau batalkan dulu bila bisa).") }
+        return true
+    }
 
     init {
         // Penggerak otomatis: tiap kali tahap berubah, lanjutkan langkah berikutnya.
@@ -178,6 +211,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
     /** Pindai USB host yang tersambung sekarang dan cari device yang cocok pola MediaTek BROM/Preloader. */
     fun scanAndConnect() {
+        if (blockedByIo()) return
         closeSession()
         _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE)
         val allDevices = usbManager.deviceList.values.toList()
@@ -233,7 +267,12 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                 postError(device.deviceName, "open_device", "Gagal membuka koneksi USB ke device (openDevice null).")
                 return@launch
             }
-            val intf = device.getInterface(0)
+            val intf = BromProtocol.findBulkInterface(device)
+            if (intf == null) {
+                try { conn.close() } catch (_: Throwable) {}
+                postError(device.deviceName, "endpoints", "Tidak ada interface USB dengan endpoint bulk IN+OUT di device ini (bukan CDC data MediaTek?).")
+                return@launch
+            }
             val result = try {
                 BromProtocol.identify(conn, intf)
             } catch (t: Throwable) {
@@ -258,12 +297,21 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                     is BromProtocol.BromResult.Error -> {
                         log.add("FlashTool", "BROM identify ${device.deviceName}", "ERROR[${result.stage}]: ${result.message}")
                         try { conn.close() } catch (_: Throwable) {}
-                        _state.value = FlashToolState(
-                            stage = FlashStage.ERROR,
-                            deviceName = device.deviceName,
-                            errorStage = result.stage,
-                            errorMessage = result.message
-                        )
+                        // Jendela BROM singkat: kalau sesi START masih berjalan, jangan menyerah —
+                        // tunggu device muncul lagi lalu handshake ulang otomatis sampai deadline.
+                        if (_files.value.running && result.stage in RETRYABLE_STAGES &&
+                            System.currentTimeMillis() < startDeadline) {
+                            _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE, deviceName = device.deviceName,
+                                info = "Handshake belum berhasil (${result.stage}), mencoba lagi otomatis…")
+                            waitForDevice(afterFailure = true)
+                        } else {
+                            _state.value = FlashToolState(
+                                stage = FlashStage.ERROR,
+                                deviceName = device.deviceName,
+                                errorStage = result.stage,
+                                errorMessage = result.message
+                            )
+                        }
                     }
                 }
             }
@@ -768,6 +816,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
      * dan hanya jalan kalau [WritePending.fitsInPartition] true. Ini MENULIS KE PENYIMPANAN PERMANEN.
      */
     fun confirmWrite() {
+        if (blockedByIo()) return
         val sess = session
         val pending = _state.value.writePending
         if (sess == null || pending == null || !pending.fitsInPartition || _state.value.stage != FlashStage.GPT_READY) {
@@ -1003,21 +1052,34 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
      */
     fun start() {
         pollJob?.cancel()
+        startDeadline = System.currentTimeMillis() + 120_000L
         _files.update { it.copy(running = true, waiting = false, note = null) }
         if (hasMtkDevice()) {
             scanAndConnect()
             return
         }
+        waitForDevice(afterFailure = false)
+    }
+
+    @Volatile private var startDeadline = 0L
+    private val RETRYABLE_STAGES = setOf(
+        "handshake_read", "handshake_write", "handshake_mismatch", "claim_interface", "open_device", "endpoints"
+    )
+
+    /** Tunggu device MediaTek muncul (lagi), lalu jalankan scan+handshake. Dipakai juga untuk retry. */
+    private fun waitForDevice(afterFailure: Boolean) {
+        pollJob?.cancel()
         _files.update { it.copy(waiting = true) }
         pollJob = scope.launch {
-            val deadline = System.currentTimeMillis() + 120_000L
+            val deadline = startDeadline
+            if (afterFailure) delay(800) // beri waktu device re-enumerate
             while (isActive && System.currentTimeMillis() < deadline) {
                 if (hasMtkDevice()) {
                     _files.update { it.copy(waiting = false) }
                     withContext(Dispatchers.Main) { scanAndConnect() }
                     return@launch
                 }
-                delay(500)
+                delay(150)
             }
             _files.update {
                 it.copy(running = false, waiting = false, note = "Waktu tunggu 2 menit habis — device BROM tidak muncul. Cek kabel dan kombinasi tombol, lalu coba lagi.")
@@ -1027,6 +1089,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
     /** BERHENTI: batalkan penantian, tutup sesi USB, kembali ke keadaan awal (pilihan file tetap). */
     fun stop() {
+        if (blockedByIo()) return
         pollJob?.cancel()
         pollJob = null
         _files.update { it.copy(running = false, waiting = false) }
@@ -1096,6 +1159,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
 
     /** Reset total: tutup sesi USB yang masih terbuka dan kembali ke keadaan awal. */
     fun reset() {
+        if (blockedByIo()) return
         closeSession()
         pendingDaBytes = null
         pendingPreloaderBytes = null
