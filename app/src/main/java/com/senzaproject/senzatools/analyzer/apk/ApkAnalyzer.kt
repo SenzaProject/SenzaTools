@@ -107,7 +107,8 @@ class ApkAnalyzer(private val ctx: Context) {
     fun analyze(file: File, displayName: String): ApkReport {
         val pm = ctx.packageManager
         val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS or
-            PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS or PackageManager.GET_SIGNING_CERTIFICATES
+            PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS or
+            (if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES)
         val pi = pm.getPackageArchiveInfo(file.absolutePath, flags)
             ?: throw IllegalArgumentException("Bukan APK utama yang valid (mungkin split APK, AAB, atau file rusak).")
         val ai = pi.applicationInfo ?: throw IllegalArgumentException("ApplicationInfo tidak tersedia pada APK ini.")
@@ -148,7 +149,7 @@ class ApkAnalyzer(private val ctx: Context) {
             ApkPermission(name, level, info?.protection == PermissionInfo.PROTECTION_DANGEROUS, permNotes[name.substringAfterLast('.')])
         }
 
-        val certs = readCerts(pi.signingInfo)
+        val certs = if (Build.VERSION.SDK_INT >= 28) readCerts(pi.signingInfo) else certsFrom(pi.signatures)
 
         // ---- isi ZIP
         val libs = mutableListOf<NativeLib>()
@@ -217,7 +218,7 @@ class ApkAnalyzer(private val ctx: Context) {
         val vAppName: String = label
         val vPackage: String = pi.packageName
         val vVersionName: String? = pi.versionName
-        val vVersionCode: Long = pi.longVersionCode
+        val vVersionCode: Long = if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()
         val vMinSdk: Int = ai.minSdkVersion
         val vTargetSdk: Int = ai.targetSdkVersion
         val vCompileSdkRaw: Int = 0
@@ -245,9 +246,15 @@ class ApkAnalyzer(private val ctx: Context) {
         )
     }
 
+    @androidx.annotation.RequiresApi(28)
     private fun readCerts(si: android.content.pm.SigningInfo?): List<CertInfo> {
         if (si == null) return emptyList()
         val sigs = if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+        return certsFrom(sigs)
+    }
+
+    /** Dipakai juga di Android 8 (API 26-27) lewat PackageInfo.signatures yang lama. */
+    private fun certsFrom(sigs: Array<android.content.pm.Signature>?): List<CertInfo> {
         return sigs.orEmpty().mapNotNull { sig ->
             try {
                 val cert = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(sig.toByteArray())) as X509Certificate

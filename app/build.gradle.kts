@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "com.senzaproject.senzatools"
-        minSdk = 31          // Android 12
+        minSdk = 26          // Android 8.0 (Oreo)
         targetSdk = 35
         versionCode = if (ciRunNumber > 0) ciRunNumber else 1
         versionName = "1.2.0"

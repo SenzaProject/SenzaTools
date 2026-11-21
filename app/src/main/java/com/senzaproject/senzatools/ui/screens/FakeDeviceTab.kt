@@ -88,7 +88,8 @@ fun FakeDeviceTab(s: ServiceLocator) {
         Body("Samarkan model perangkat dan SoC agar game membuka opsi grafis (kualitas, FPS) yang biasanya hanya untuk HP tertentu. Memakai resetprop, butuh root dan Magisk/KernelSU/APatch.", dim = true)
         if (!rootOk) Caption("Fitur ini butuh akses root. Izinkan di root manager, lalu tekan Minta izin root di Tools → Akses.", color = g.warn)
         KeyValue("Dilihat aplikasi (Build.MODEL)", "${Build.MANUFACTURER} ${Build.MODEL}")
-        KeyValue("SoC dilihat aplikasi", "${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
+        if (Build.VERSION.SDK_INT >= 31) KeyValue("SoC dilihat aplikasi", "${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
+        else KeyValue("SoC dilihat aplikasi", Build.HARDWARE)
         if (rootOk) {
             val st0 = status
             when {

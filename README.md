@@ -40,8 +40,8 @@ git push -u origin main
 Gunakan Personal Access Token GitHub sebagai password.
 
 ## Persyaratan
-- Android 12+ (minSdk 31), target/compile SDK 35.
-- Uji pada Android 12–16 menjadi target; kompatibilitas aktual bergantung vendor dan tingkat akses.
+- Android 8.0+ (minSdk 26), target/compile SDK 35.
+- Uji pada Android 8–16 menjadi target; beberapa fitur (blur lensa, SoC info, kesehatan baterai) otomatis dilewati di Android yang lebih lama; kompatibilitas aktual bergantung vendor dan tingkat akses.
 
 ## Dokumentasi
 - [docs/FAKE_DEVICE.md](docs/FAKE_DEVICE.md) — fitur Fake Device untuk membuka grafis game (Toolkit)

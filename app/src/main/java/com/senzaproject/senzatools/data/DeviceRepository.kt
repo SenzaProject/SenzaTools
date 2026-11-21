@@ -526,10 +526,17 @@ class DeviceRepository(private val ctx: Context) {
         val dm = ctx.getSystemService(DisplayManager::class.java)
         val d = dm.getDisplay(Display.DEFAULT_DISPLAY)
         val metrics = ctx.resources.displayMetrics
-        val wm = ctx.getSystemService(WindowManager::class.java)
-        val b = wm.maximumWindowMetrics.bounds
+        // maximumWindowMetrics baru ada di Android 11 (API 30); di bawahnya pakai ukuran layar fisik (getRealSize).
+        val (bw, bh) = if (Build.VERSION.SDK_INT >= 30) {
+            val b = ctx.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+            b.width() to b.height()
+        } else {
+            val p = android.graphics.Point()
+            @Suppress("DEPRECATION") d?.getRealSize(p)
+            (if (p.x > 0) p.x else metrics.widthPixels) to (if (p.y > 0) p.y else metrics.heightPixels)
+        }
         val inches = if (metrics.xdpi > 0 && metrics.ydpi > 0)
-            sqrt((b.width() / metrics.xdpi).toDouble().let { it * it } + (b.height() / metrics.ydpi).toDouble().let { it * it })
+            sqrt((bw / metrics.xdpi).toDouble().let { it * it } + (bh / metrics.ydpi).toDouble().let { it * it })
         else null
         val modes = d?.supportedModes?.toList().orEmpty()
         val rates = modes.map { it.refreshRate.roundToInt() }.distinct().sortedDescending()

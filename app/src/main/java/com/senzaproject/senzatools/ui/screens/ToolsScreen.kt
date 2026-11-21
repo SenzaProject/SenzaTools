@@ -184,7 +184,7 @@ private fun PackageCard(s: ServiceLocator) {
             }
             listOf(
                 "Paket" to pkg,
-                "Versi" to "${pi.versionName ?: "?"} (${pi.longVersionCode})",
+                "Versi" to "${pi.versionName ?: "?"} (${if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()})",
                 "Min / Target SDK" to "${ai?.minSdkVersion ?: "?"} / ${ai?.targetSdkVersion ?: "?"}",
                 "UID" to (ai?.uid?.toString() ?: "?"),
                 "Terpasang" to pi.firstInstallTime.formatTime(),
