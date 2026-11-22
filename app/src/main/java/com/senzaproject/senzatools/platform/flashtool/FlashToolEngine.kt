@@ -184,7 +184,46 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         }
     }
 
+    /** Mencatat kapan device USB terpasang/terlepas supaya terlihat apakah BROM/Preloader benar-benar "putus sendiri". */
+    private val attachTimes = HashMap<String, Long>()
+    private var usbEventReceiverRegistered = false
+    private val usbEventReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val dev: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            if (dev == null || dev.vendorId != MTK_VID) return
+            val tag = "VID 0x${dev.vendorId.toString(16)} PID 0x${dev.productId.toString(16)} ${dev.deviceName}"
+            val now = System.currentTimeMillis()
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    attachTimes[dev.deviceName] = now
+                    log.add("FlashTool", "USB terpasang", tag)
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val t0 = attachTimes.remove(dev.deviceName)
+                    val lived = if (t0 != null) "${now - t0} ms setelah terpasang" else "waktu pasang tidak diketahui"
+                    log.add("FlashTool", "USB terlepas", "$tag — $lived")
+                }
+            }
+        }
+    }
+
+    private fun ensureUsbEventReceiver() {
+        if (usbEventReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ctx.registerReceiver(usbEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            ctx.registerReceiver(usbEventReceiver, filter)
+        }
+        usbEventReceiverRegistered = true
+    }
+
     private fun ensureReceiver() {
+        ensureUsbEventReceiver()
         if (receiverRegistered) return
         val filter = IntentFilter(actionUsbPermission)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -202,6 +241,10 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
             try { ctx.unregisterReceiver(permissionReceiver) } catch (_: Throwable) {}
             receiverRegistered = false
         }
+        if (usbEventReceiverRegistered) {
+            try { ctx.unregisterReceiver(usbEventReceiver) } catch (_: Throwable) {}
+            usbEventReceiverRegistered = false
+        }
     }
 
     private fun closeSession() {
@@ -212,7 +255,9 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     /** Pindai USB host yang tersambung sekarang dan cari device yang cocok pola MediaTek BROM/Preloader. */
     fun scanAndConnect() {
         if (blockedByIo()) return
+        ensureUsbEventReceiver()
         closeSession()
+        if (!_files.value.running && System.currentTimeMillis() > manualDeadline) manualDeadline = System.currentTimeMillis() + 20_000L
         _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE)
         val allDevices = usbManager.deviceList.values.toList()
         val candidates = allDevices.filter { it.vendorId == MTK_VID }
@@ -264,13 +309,22 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         scope.launch {
             val conn = usbManager.openDevice(device)
             if (conn == null) {
-                postError(device.deviceName, "open_device", "Gagal membuka koneksi USB ke device (openDevice null).")
+                // Biasanya device BROM/Preloader sudah lepas & muncul lagi dengan alamat USB baru (izin lama hangus).
+                val msg = "Gagal membuka koneksi USB ke device (openDevice null) — device kemungkinan baru saja re-enumerate."
+                withContext(Dispatchers.Main) {
+                    log.add("FlashTool", "BROM identify ${device.deviceName}", "ERROR[open_device]: $msg")
+                    failOrRetry(device.deviceName, "open_device", msg)
+                }
                 return@launch
             }
             val intf = BromProtocol.findBulkInterface(device)
             if (intf == null) {
                 try { conn.close() } catch (_: Throwable) {}
-                postError(device.deviceName, "endpoints", "Tidak ada interface USB dengan endpoint bulk IN+OUT di device ini (bukan CDC data MediaTek?).")
+                val msg = "Tidak ada interface USB dengan endpoint bulk IN+OUT di device ini (bukan CDC data MediaTek?)."
+                withContext(Dispatchers.Main) {
+                    log.add("FlashTool", "BROM identify ${device.deviceName}", "ERROR[endpoints]: $msg")
+                    failOrRetry(device.deviceName, "endpoints", msg)
+                }
                 return@launch
             }
             val result = try {
@@ -297,21 +351,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
                     is BromProtocol.BromResult.Error -> {
                         log.add("FlashTool", "BROM identify ${device.deviceName}", "ERROR[${result.stage}]: ${result.message}")
                         try { conn.close() } catch (_: Throwable) {}
-                        // Jendela BROM singkat: kalau sesi START masih berjalan, jangan menyerah —
-                        // tunggu device muncul lagi lalu handshake ulang otomatis sampai deadline.
-                        if (_files.value.running && result.stage in RETRYABLE_STAGES &&
-                            System.currentTimeMillis() < startDeadline) {
-                            _state.value = FlashToolState(stage = FlashStage.WAITING_DEVICE, deviceName = device.deviceName,
-                                info = "Handshake belum berhasil (${result.stage}), mencoba lagi otomatis…")
-                            waitForDevice(afterFailure = true)
-                        } else {
-                            _state.value = FlashToolState(
-                                stage = FlashStage.ERROR,
-                                deviceName = device.deviceName,
-                                errorStage = result.stage,
-                                errorMessage = result.message
-                            )
-                        }
+                        failOrRetry(device.deviceName, result.stage, result.message)
                     }
                 }
             }
@@ -1052,6 +1092,7 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
      */
     fun start() {
         pollJob?.cancel()
+        ensureUsbEventReceiver()
         startDeadline = System.currentTimeMillis() + 120_000L
         _files.update { it.copy(running = true, waiting = false, note = null) }
         if (hasMtkDevice()) {
@@ -1062,6 +1103,50 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
     }
 
     @Volatile private var startDeadline = 0L
+    /** Jendela coba-ulang otomatis untuk tombol "Pindai & Deteksi" (di luar sesi MULAI). */
+    @Volatile private var manualDeadline = 0L
+
+    private fun canRetry(stage: String): Boolean {
+        if (stage !in RETRYABLE_STAGES) return false
+        val now = System.currentTimeMillis()
+        return if (_files.value.running) now < startDeadline else now < manualDeadline
+    }
+
+    /**
+     * Jendela BROM/Preloader itu singkat dan device sering re-enumerate (alamat USB berubah, izin hangus).
+     * Selama masih dalam jendela waktu, jangan langsung menyerah: tunggu device muncul lagi lalu ulangi.
+     */
+    private fun failOrRetry(deviceName: String?, stage: String, message: String) {
+        if (!canRetry(stage)) {
+            _state.value = FlashToolState(stage = FlashStage.ERROR, deviceName = deviceName, errorStage = stage, errorMessage = message)
+            return
+        }
+        _state.value = FlashToolState(
+            stage = FlashStage.WAITING_DEVICE, deviceName = deviceName,
+            info = "Koneksi belum berhasil ($stage), mencoba lagi otomatis…"
+        )
+        if (_files.value.running) {
+            waitForDevice(afterFailure = true)
+            return
+        }
+        pollJob?.cancel()
+        pollJob = scope.launch {
+            delay(250)
+            while (isActive && System.currentTimeMillis() < manualDeadline) {
+                if (hasMtkDevice()) {
+                    withContext(Dispatchers.Main) { scanAndConnect() }
+                    return@launch
+                }
+                delay(30)
+            }
+            withContext(Dispatchers.Main) {
+                _state.value = FlashToolState(
+                    stage = FlashStage.ERROR, errorStage = "scan",
+                    errorMessage = "Device MediaTek hilang dan tidak muncul lagi dalam 20 detik. Ulangi kombinasi tombol BROM lalu tekan Pindai lagi."
+                )
+            }
+        }
+    }
     private val RETRYABLE_STAGES = setOf(
         "handshake_read", "handshake_write", "handshake_mismatch", "claim_interface", "open_device", "endpoints"
     )
@@ -1072,14 +1157,14 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
         _files.update { it.copy(waiting = true) }
         pollJob = scope.launch {
             val deadline = startDeadline
-            if (afterFailure) delay(800) // beri waktu device re-enumerate
+            if (afterFailure) delay(250) // beri waktu device re-enumerate (jendela BROM singkat, jangan buang waktu)
             while (isActive && System.currentTimeMillis() < deadline) {
                 if (hasMtkDevice()) {
                     _files.update { it.copy(waiting = false) }
                     withContext(Dispatchers.Main) { scanAndConnect() }
                     return@launch
                 }
-                delay(150)
+                delay(30)
             }
             _files.update {
                 it.copy(running = false, waiting = false, note = "Waktu tunggu 2 menit habis — device BROM tidak muncul. Cek kabel dan kombinasi tombol, lalu coba lagi.")
