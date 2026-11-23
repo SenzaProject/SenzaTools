@@ -17,7 +17,7 @@ android {
         minSdk = 26          // Android 8.0 (Oreo)
         targetSdk = 35
         versionCode = if (ciRunNumber > 0) ciRunNumber else 1
-        versionName = "1.2.0"
+        versionName = "1.2.1"
 
         buildConfigField("int", "BUILD_NUMBER", "$ciRunNumber")
     }
