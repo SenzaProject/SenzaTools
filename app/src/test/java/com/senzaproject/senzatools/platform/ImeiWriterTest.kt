@@ -32,4 +32,25 @@ class ImeiWriterTest {
         assertNull(ImeiWriter.parseEgmr(sec["A2"]!!))
         assertTrue("OK" in sec["A1"]!!)
     }
+
+    @Test fun maskHidesMiddleDigits() {
+        assertEquals("4901•••••••••18", ImeiWriter.mask(good))
+        assertEquals("OK", ImeiWriter.mask("OK"))
+    }
+
+    @Test fun snippetEmptyAndFilled() {
+        assertTrue(ImeiWriter.snippet("  \n").contains("kosong"))
+        assertFalse(ImeiWriter.snippet("+EGMR: \"$good\"\nOK").contains(good))
+    }
+
+    @Test fun parseEgmrAcceptsSlotPrefix() {
+        assertEquals(good, ImeiWriter.parseEgmr("+EGMR: 7,\"$good\"\nOK"))
+    }
+
+    @Test fun probeSectionsKeepSeparateNames() {
+        val sec = ImeiWriter.sections(listOf("@@ENF Enforcing", "@@PROBE1 /dev/radio/pttycmd1", "", "@@PROBE2 /dev/radio/atci1", "OK", "@@NORESP"))
+        assertEquals("Enforcing", sec["ENF"]!!.trim())
+        assertTrue("OK" in sec["PROBE2"]!!)
+        assertTrue("NORESP" in sec)
+    }
 }
