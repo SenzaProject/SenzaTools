@@ -1217,11 +1217,27 @@ class FlashToolEngine(private val ctx: Context, private val log: OperationLog) {
             FlashStage.DA_READY -> if (running) xflashHandshake()
             FlashStage.XFLASH_READY -> if (running) {
                 val bytes = selectedPreloaderBytes
-                if (bytes != null && sess != null) {
+                // Tanpa preloader sesi tidak akan pernah sampai GPT, sehingga Backup/Restore IMEI tidak bisa
+                // dipakai. Kalau user belum memilih, pakai preloader bawaan katalog (kalau ada untuk chip ini).
+                val catalogAsset = _state.value.catalogMatches.firstOrNull { it.preloaderAsset != null }?.preloaderAsset
+                val catalogBytes = if (bytes == null && catalogAsset != null) {
+                    try { FirmwareCatalog.readAsset(ctx, catalogAsset) } catch (t: Throwable) { null }
+                } else null
+                val useBytes = bytes ?: catalogBytes
+                if (useBytes != null && sess != null) {
+                    if (bytes == null) {
+                        _files.update { it.copy(note = "Preloader belum dipilih — memakai preloader bawaan katalog untuk kalibrasi DRAM.") }
+                    }
                     _state.value = _state.value.copy(stage = FlashStage.EMI_SENDING, errorStage = null, errorMessage = null)
-                    processPreloaderBytes(sess, bytes)
+                    processPreloaderBytes(sess, useBytes)
                 } else {
-                    _files.update { it.copy(running = false, note = "DA hidup dan kanal XFlash siap. Belum ada preloader dipilih, jadi kalibrasi EMI dilewati.") }
+                    _files.update {
+                        it.copy(
+                            running = false,
+                            note = "Sesi berhenti di kanal XFlash: Preloader belum dipilih. Backup/Restore IMEI butuh sesi sampai " +
+                                "tahap GPT, dan itu butuh Preloader (untuk kalibrasi DRAM). Pilih file Preloader device ini di kartu Sesi, lalu tekan MULAI lagi."
+                        )
+                    }
                 }
             }
             FlashStage.EMI_ACCEPTED -> if (running) uploadDa2()

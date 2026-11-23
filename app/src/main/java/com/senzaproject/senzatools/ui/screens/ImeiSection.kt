@@ -38,8 +38,11 @@ fun ImeiSection(s: ServiceLocator) {
     val im by s.flashTool.imei.state.collectAsState()
     val engine = s.flashTool.imei
 
+    val files by s.flashTool.files.collectAsState()
+
+    // Kartu ini SELALU tampil. Dulu disembunyikan sampai GPT terbaca, jadi kalau sesi berhenti di tengah
+    // (mis. Preloader belum dipilih) fiturnya seolah tidak ada.
     val ready = st.stage == FlashStage.GPT_READY || st.stage == FlashStage.WRITE_DONE
-    if (!ready && !im.busy && im.report == null && im.plan == null) return
 
     val candidates = remember(st.gptEntries) { ImeiPackage.findCandidates(st.gptEntries) }
     var selected by remember(candidates) { mutableStateOf(candidates.map { it.name.lowercase() }.toSet()) }
@@ -60,6 +63,44 @@ fun ImeiSection(s: ServiceLocator) {
                 "Restore = verifikasi file, simpan snapshot kondisi sekarang, tulis, lalu baca ulang dan bandingkan hash.",
             dim = true
         )
+        if (!ready) {
+            val (stepNo, stepLabel) = when (st.stage) {
+                FlashStage.IDLE, FlashStage.WAITING_DEVICE, FlashStage.PERMISSION_NEEDED, FlashStage.HANDSHAKING -> 1 to "Device belum terdeteksi lewat BROM"
+                FlashStage.IDENTIFIED, FlashStage.DA_PARSING, FlashStage.DA_MATCHED, FlashStage.DA_SENDING -> 2 to "Chip terdeteksi, DA belum dijalankan"
+                FlashStage.DA_READY, FlashStage.XFLASH_SYNCING -> 3 to "DA hidup, kanal XFlash belum terbuka"
+                FlashStage.XFLASH_READY, FlashStage.EMI_SENDING -> 4 to "Kanal XFlash terbuka, kalibrasi DRAM (EMI) belum selesai"
+                FlashStage.EMI_ACCEPTED, FlashStage.DA2_SENDING -> 5 to "EMI diterima, DA2 belum berjalan"
+                FlashStage.DA2_READY, FlashStage.GPT_READING -> 6 to "DA2 jalan, partition table belum terbaca"
+                FlashStage.ERROR -> 0 to "Sesi gagal di tahap: ${st.errorStage ?: "?"}"
+                else -> 0 to "Sesi belum siap"
+            }
+            Body("Belum bisa dipakai. Status sesi: $stepLabel" + if (stepNo > 0) " (tahap $stepNo dari 6)." else ".", color = g.warn)
+            if (st.stage == FlashStage.ERROR) st.errorMessage?.let { Caption(it, color = g.bad) }
+            if (files.preloaderName == null) {
+                Body(
+                    "Backup/Restore IMEI butuh sesi sampai tahap GPT, dan itu butuh file Preloader (kalibrasi DRAM). " +
+                        "Pilih Preloader di kartu Sesi bila belum ada preloader bawaan untuk chip ini.",
+                    dim = true
+                )
+            }
+            files.note?.let { Caption(it, color = g.warn) }
+            Caption("Cara: masuk mode BROM, pilih File DA (+ Preloader), lalu tekan tombol di bawah. Tombol Backup/Restore aktif otomatis begitu partisi terbaca.")
+            GlassButton(
+                when {
+                    files.waiting -> "Menunggu device…"
+                    files.running -> "Menyiapkan sesi…"
+                    else -> "Siapkan Sesi IMEI"
+                },
+                { s.flashTool.start() },
+                Modifier.fillMaxWidth(), primary = true,
+                enabled = files.daName != null && !files.running
+            )
+            if (files.daName == null) Caption("Pilih File DA dulu di kartu Sesi.", color = g.warn)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassButton("Backup IMEI", {}, Modifier.weight(1f), enabled = false)
+                GlassButton("Restore IMEI", {}, Modifier.weight(1f), enabled = false)
+            }
+        }
         if (ready) {
             if (candidates.isEmpty()) {
                 Body("Tidak ada partisi IMEI (nvram/nvdata/nvcfg/protect1/protect2/proinfo) di GPT device ini.", color = g.bad)

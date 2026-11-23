@@ -119,7 +119,7 @@ fun FlashToolTab(s: ServiceLocator) {
             onPick = { daPicker.launch(arrayOf("*/*")) }, onClear = null)
         FileSlot("File AUTH", files.authName, "Opsional — untuk BROM dengan DAA",
             onPick = { authPicker.launch(arrayOf("*/*")) }, onClear = { s.flashTool.clearAuth() })
-        FileSlot("Preloader", files.preloaderName, "Opsional — sumber data EMI setelah DA hidup",
+        FileSlot("Preloader", files.preloaderName, "Disarankan — dibutuhkan untuk Backup/Restore IMEI (kalibrasi DRAM)",
             onPick = { preloaderPicker.launch(arrayOf("*/*")) }, onClear = { s.flashTool.clearPreloader() })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassButton(
@@ -198,6 +198,9 @@ fun FlashToolTab(s: ServiceLocator) {
         }
         files.preview?.let { Mono(it, size = 11) }
     }
+
+    // Backup & Restore IMEI: selalu tampil tepat di bawah Scatter supaya mudah ditemukan.
+    ImeiSection(s)
 
     val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
@@ -382,8 +385,6 @@ fun FlashToolTab(s: ServiceLocator) {
             }
         }
     }
-
-    ImeiSection(s)
 
     val pending = st.writePending
     if (pending != null) {
