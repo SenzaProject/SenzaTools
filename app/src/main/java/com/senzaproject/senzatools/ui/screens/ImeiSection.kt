@@ -95,6 +95,10 @@ fun ImeiSection(s: ServiceLocator) {
                 Modifier.fillMaxWidth(), primary = true,
                 enabled = files.daName != null && !files.running
             )
+            if (files.waiting) {
+                Caption("Menunggu HP target masuk mode BROM (maksimal 2 menit). Colok kabel data sambil menahan tombol volume.", color = g.warn)
+            }
+            if (files.running || files.waiting) GlassButton("Batalkan", { s.flashTool.stop() }, Modifier.fillMaxWidth(), danger = true)
             if (files.daName == null) Caption("Pilih File DA dulu di kartu Sesi.", color = g.warn)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassButton("Backup IMEI", {}, Modifier.weight(1f), enabled = false)

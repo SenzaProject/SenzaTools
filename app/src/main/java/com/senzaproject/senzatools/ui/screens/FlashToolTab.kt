@@ -201,6 +201,7 @@ fun FlashToolTab(s: ServiceLocator) {
 
     // Backup & Restore IMEI: selalu tampil tepat di bawah Scatter supaya mudah ditemukan.
     ImeiSection(s)
+    ImeiManualCard(s)
 
     val tahap2Visible = st.stage == FlashStage.IDENTIFIED || st.stage == FlashStage.DA_PARSING ||
         st.stage == FlashStage.DA_MATCHED || st.stage == FlashStage.DA_SENDING ||
