@@ -33,24 +33,48 @@ class ImeiWriterTest {
         assertTrue("OK" in sec["A1"]!!)
     }
 
-    @Test fun maskHidesMiddleDigits() {
-        assertEquals("4901•••••••••18", ImeiWriter.mask(good))
-        assertEquals("OK", ImeiWriter.mask("OK"))
+    @Test fun briefSummarizesModemReply() {
+        assertEquals("tidak ada balasan", ImeiWriter.brief(null))
+        assertEquals("tidak ada balasan", ImeiWriter.brief("\n  \n"))
+        assertEquals("+EGMR: \"\" | OK", ImeiWriter.brief("+EGMR: \"\"\nOK\n"))
     }
 
-    @Test fun snippetEmptyAndFilled() {
-        assertTrue(ImeiWriter.snippet("  \n").contains("kosong"))
-        assertFalse(ImeiWriter.snippet("+EGMR: \"$good\"\nOK").contains(good))
+    @Test fun writeVerifiedWhenReadBackMatches() {
+        val sec = mapOf(
+            "USE" to "/dev/radio/pttycmd1 rn\n",
+            "B1" to "+EGMR: \"\"\nOK\n",
+            "W1" to "OK\n",
+            "A1" to "+EGMR: \"$good\"\nOK\n"
+        )
+        val r = ImeiWriter.analyzeWrite(sec, good, null)
+        assertTrue(r.ok)
+        assertFalse(r.uncertain)
     }
 
-    @Test fun parseEgmrAcceptsSlotPrefix() {
-        assertEquals(good, ImeiWriter.parseEgmr("+EGMR: 7,\"$good\"\nOK"))
+    @Test fun writeUncertainWhenModemSilent() {
+        val sec = mapOf(
+            "BLIND" to "/dev/radio/pttycmd1 rn\n",
+            "USE" to "/dev/radio/pttycmd1 rn\n"
+        )
+        val r = ImeiWriter.analyzeWrite(sec, good, null)
+        assertFalse(r.ok)
+        assertTrue(r.uncertain)
     }
 
-    @Test fun probeSectionsKeepSeparateNames() {
-        val sec = ImeiWriter.sections(listOf("@@ENF Enforcing", "@@PROBE1 /dev/radio/pttycmd1", "", "@@PROBE2 /dev/radio/atci1", "OK", "@@NORESP"))
-        assertEquals("Enforcing", sec["ENF"]!!.trim())
-        assertTrue("OK" in sec["PROBE2"]!!)
-        assertTrue("NORESP" in sec)
+    @Test fun writeFailsWhenModemSaysError() {
+        val sec = mapOf(
+            "USE" to "/dev/radio/atci1 r\n",
+            "W1" to "ERROR\n",
+            "A1" to "+EGMR: \"\"\nOK\n"
+        )
+        val r = ImeiWriter.analyzeWrite(sec, good, null)
+        assertFalse(r.ok)
+        assertFalse(r.uncertain)
+    }
+
+    @Test fun writeReportsMissingPort() {
+        val r = ImeiWriter.analyzeWrite(mapOf("NODEV" to "\n"), good, null)
+        assertFalse(r.ok)
+        assertFalse(r.uncertain)
     }
 }

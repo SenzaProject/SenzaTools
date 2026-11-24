@@ -95,14 +95,15 @@ fun ImeiManualCard(s: ServiceLocator) {
                 Modifier.weight(1f), enabled = rootOk && !busy
             )
         }
-        if (busy) Spinner("Bicara dengan modem… (± 15 detik, jangan tutup app)")
+        if (busy) Spinner("Bicara dengan modem… (bisa sampai ± 1 menit, jangan tutup app)")
         Caption("Setelah menulis: restart HP lalu cek dengan *#06#.")
     }
 
     report?.let { r ->
         GlassCard(strong = true) {
             Heading(r.title)
-            r.lines.forEach { Body(it, color = if (r.ok) g.good else g.bad) }
+            val tone = if (r.ok) g.good else if (r.uncertain) g.warn else g.bad
+            r.lines.forEach { Body(it, color = tone) }
             GlassButton("Tutup", { report = null })
         }
     }
