@@ -52,7 +52,7 @@ data class ImeiWriteReport(
  * (dan sebaliknya, "OK" milik rild terbaca seolah balasan kita).
  *
  * Cara kerja sekarang:
- * - Pemegang tiap port dicari (lsof). Port yang TIDAK dipegang proses lain dites lebih dulu dengan perintah "AT"
+ * - Pemegang tiap port dicari (lsof). Port yang TIDAK dipegang proses lain dites lebih dulu dengan perintah baca AT+EGMR=0,7 (hanya balasan "+EGMR:"/ERROR yang dianggap jawaban; "OK" saja bisa berasal dari data lain)
  *   (CR+LF, lalu CR). Port pertama yang menjawab OK dipakai.
  * - Kalau semua port dipegang layanan radio, layanan itu DIJEDA sebentar (SIGSTOP) supaya kita satu-satunya pembaca,
  *   lalu dilanjutkan lagi (SIGCONT) segera setelah selesai. Dijaga tiga lapis: trap di skrip, langkah "resume" di
@@ -106,6 +106,7 @@ case "^I2" in *[!0-9]*) echo "@@BADFILE"; exit 0;; esac
         private const val SH_AT = """
 at() {
   : > "^OUT"
+  stty -F "^1" raw -echo 2>/dev/null
   (
     exec 3<>"^1" || exit 9
     cat <&3 > /dev/null &
@@ -129,6 +130,9 @@ at() {
   ) 2>>"^ERR"
   tr -d '\r' < "^OUT"
 }
+engaged() {
+  printf '%s\n' "^1" | grep -q -E '(\+EGMR:|ERROR)'
+}
 diag() {
   echo "@@DIAG"
   echo "SELinux: ^(getenforce 2>/dev/null)"
@@ -148,13 +152,13 @@ for p in ^CANDS; do
   i=^((i+1))
   echo "@@H^i ^p"
   if [ -n "^HL" ]; then echo "^HL" | while read c q r; do echo "^c(^q)"; done; else echo "-"; fi
-  if [ -z "^HL" ] && [ -z "^USE" ] && [ ^n -lt 4 ]; then
+  if [ -z "^HL" ] && [ -z "^USE" ]; then
     for t in rn r; do
       n=^((n+1))
-      R=^(at "^p" "^t" AT 20)
+      R=^(at "^p" "^t" 'AT+EGMR=0,7' 25)
       echo "@@P^n ^p ^t"
       echo "^R"
-      case "^R" in *OK*) USE="^p ^t"; break;; esac
+      if engaged "^R"; then USE="^p ^t"; break; fi
     done
   fi
 done
@@ -176,10 +180,10 @@ if [ -z "^USE" ]; then
     sleep 0.3
     for t in rn r; do
       n=^((n+1))
-      R=^(at "^p" "^t" AT 20)
+      R=^(at "^p" "^t" 'AT+EGMR=0,7' 25)
       echo "@@P^n ^p ^t frozen"
       echo "^R"
-      case "^R" in *OK*) USE="^p ^t"; break;; esac
+      if engaged "^R"; then USE="^p ^t"; break; fi
     done
     if [ -n "^USE" ]; then echo "@@FROZEN^FN"; break; fi
     for pid in ^FR; do kill -CONT "^pid" 2>/dev/null; done
@@ -287,7 +291,7 @@ rm -f /data/local/tmp/senza_at.frozen
                     val term = if (tk.getOrNull(1) == "rn") "CR+LF" else "CR"
                     val frozen = if (tk.getOrNull(2) == "frozen") ", radio dijeda" else ""
                     val reply = brief(rows.drop(1).joinToString("\n"))
-                    out += "Tes AT $port ($term$frozen): $reply"
+                    out += "Tes baca $port ($term$frozen): $reply"
                 }
             }
             return out
@@ -314,7 +318,7 @@ rm -f /data/local/tmp/senza_at.frozen
 
         private fun noPort(sec: Map<String, String>, title: String): ImeiWriteReport {
             val lines = mutableListOf(
-                "Tidak ada port AT yang menjawab tes \"AT\", termasuk setelah layanan radio dijeda sebentar. Tidak ada yang ditulis."
+                "Tidak ada port AT yang menjawab tes baca (AT+EGMR=0,7), termasuk setelah layanan radio dijeda sebentar. Tidak ada yang ditulis."
             )
             lines += ALTERNATIF
             lines += diag(sec)

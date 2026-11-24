@@ -112,4 +112,26 @@ class ImeiWriterTest {
         assertTrue(ok.lines.any { good in it })
         assertFalse(ImeiWriter.analyzeRead(mapOf("NOPORT" to "\n")).ok)
     }
+
+    @Test fun noPortReportShowsReadProbeAndHolder() {
+        val sec = mapOf(
+            "H1" to "/dev/radio/pttycmd1\nmtkfusionrild(25293)\n",
+            "P1" to "/dev/radio/pttycmd1 rn frozen\n+ECELL: 1,7,\"0028A248\"\nOK\n",
+            "NOPORT" to "\n"
+        )
+        val r = ImeiWriter.analyzeRead(sec)
+        assertFalse(r.ok)
+        assertTrue(r.lines.any { it.contains("Pemegang /dev/radio/pttycmd1: mtkfusionrild(25293)") })
+        assertTrue(r.lines.any { it.startsWith("Tes baca /dev/radio/pttycmd1 (CR+LF, radio dijeda):") && it.contains("bukan jawaban") })
+    }
+
+    @Test fun unsolicitedOkNeverCountsAsVerified() {
+        val sec = mapOf(
+            "USE" to "/dev/radio/pttycmd1 rn\n",
+            "W1" to "+ECELL: 1,7,\"0028A248\"\nOK\n",
+            "A1" to "+ECELL: 1,7,\"0028A248\"\nOK\n"
+        )
+        val r = ImeiWriter.analyzeWrite(sec, good, null)
+        assertFalse(r.ok)
+    }
 }
