@@ -53,7 +53,6 @@ class ImeiWriterTest {
 
     @Test fun writeUncertainWhenModemSilent() {
         val sec = mapOf(
-            "BLIND" to "/dev/radio/pttycmd1 rn\n",
             "USE" to "/dev/radio/pttycmd1 rn\n"
         )
         val r = ImeiWriter.analyzeWrite(sec, good, null)
@@ -76,5 +75,41 @@ class ImeiWriterTest {
         val r = ImeiWriter.analyzeWrite(mapOf("NODEV" to "\n"), good, null)
         assertFalse(r.ok)
         assertFalse(r.uncertain)
+    }
+
+    @Test fun briefIgnoresRadioDaemonChatter() {
+        // +ECELL adalah balasan milik layanan radio (rild), bukan jawaban atas perintah kita.
+        assertEquals(
+            "tidak ada balasan (+1 baris lain, bukan jawaban)",
+            ImeiWriter.brief("+ECELL: 2,7,\"0028A220\",\"3BC4\"\n")
+        )
+        assertEquals("OK (+1 baris lain, bukan jawaban)", ImeiWriter.brief("+ECELL: 2,7\nOK\n"))
+    }
+
+    @Test fun chatterAloneIsNotAnAnswer() {
+        // Dulu baris +ECELL dianggap "jawaban" sehingga laporan salah menyebut modem menolak.
+        val sec = mapOf(
+            "USE" to "/dev/radio/pttycmd1 r\n",
+            "W1" to "+ECELL: 2,7,\"0028A220\"\n",
+            "A1" to "+ECELL: 2,7,\"0028A220\"\n"
+        )
+        val r = ImeiWriter.analyzeWrite(sec, good, null)
+        assertFalse(r.ok)
+        assertTrue(r.uncertain)
+    }
+
+    @Test fun writeFailsWhenNoPortAnswers() {
+        val r = ImeiWriter.analyzeWrite(mapOf("NOPORT" to "\n", "H1" to "/dev/radio/pttycmd1\nmtkfusionrild(17425)\n"), good, null)
+        assertFalse(r.ok)
+        assertFalse(r.uncertain)
+        assertTrue(r.lines.any { "mtkfusionrild(17425)" in it })
+    }
+
+    @Test fun readParsesImeiAndReportsSilentPort() {
+        val okSec = mapOf("USE" to "/dev/radio/pttycmd1 rn\n", "A1" to "+EGMR: \"$good\"\nOK\n", "A2" to "+EGMR: \"\"\nOK\n")
+        val ok = ImeiWriter.analyzeRead(okSec)
+        assertTrue(ok.ok)
+        assertTrue(ok.lines.any { good in it })
+        assertFalse(ImeiWriter.analyzeRead(mapOf("NOPORT" to "\n")).ok)
     }
 }

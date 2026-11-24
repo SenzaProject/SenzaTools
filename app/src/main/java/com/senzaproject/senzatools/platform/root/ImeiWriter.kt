@@ -47,28 +47,39 @@ data class ImeiWriteReport(
  * Slot 7 = IMEI 1, slot 10 = IMEI 2. "Berhasil" hanya dilaporkan kalau IMEI yang dibaca ulang dari modem sama persis
  * dengan yang ditulis.
  *
- * Cara kerja port AT (diperbaiki):
- * - Semua port kandidat (/dev/radio/pttycmd1, atci1, pttycmd2, atci2) dites dengan perintah "AT", masing-masing dengan
- *   terminator CR+LF lalu CR. Port pertama yang menjawab "OK" dipakai. Dulu hanya port pertama yang ada yang dicoba,
- *   padahal port itu belum tentu yang menjawab.
- * - Port dibuka SEKALI (baca+tulis lewat satu file descriptor), bukan dibuka terpisah untuk membaca dan menulis.
- * - Tidak bergantung pada perintah "timeout" (tidak ada di semua ROM); batas waktu dihitung di skrip sendiri.
- * - Kalau tidak ada port yang menjawab, perintah tulis tetap dikirim ke port pertama (cara "tulis buta" yang umum dipakai
- *   di MTK), tetapi hasilnya dilaporkan sebagai BELUM TERVERIFIKASI, bukan sukses.
- * - Balasan mentah modem dan info teknis (SELinux, pemilik port, penolakan AVC) ikut ditampilkan di laporan.
+ * Kenapa versi lama gagal di HP MediaTek modern: /dev/radio/pttycmd1 adalah pty yang dibuka TERUS-MENERUS oleh layanan
+ * radio (mtkfusionrild). Dua pembaca di satu pty saling berebut data, jadi balasan perintah IMEI kita dimakan rild
+ * (dan sebaliknya, "OK" milik rild terbaca seolah balasan kita).
+ *
+ * Cara kerja sekarang:
+ * - Pemegang tiap port dicari (lsof). Port yang TIDAK dipegang proses lain dites lebih dulu dengan perintah "AT"
+ *   (CR+LF, lalu CR). Port pertama yang menjawab OK dipakai.
+ * - Kalau semua port dipegang layanan radio, layanan itu DIJEDA sebentar (SIGSTOP) supaya kita satu-satunya pembaca,
+ *   lalu dilanjutkan lagi (SIGCONT) segera setelah selesai. Dijaga tiga lapis: trap di skrip, langkah "resume" di
+ *   [resume] setelah skrip selesai atau timeout, dan restart HP sebagai jalan terakhir. Hanya proses yang namanya
+ *   mengandung ril/atci/radio yang dijeda.
+ * - Port dibuka SEKALI (baca+tulis lewat satu file descriptor); data lama dibuang sebelum perintah dikirim; tidak
+ *   bergantung pada perintah "timeout".
+ * - Kalau tidak ada port yang menjawab "AT", TIDAK ada yang ditulis. Tidak ada lagi "tulis buta".
+ * - Hanya baris hasil (OK / ERROR / +CME ERROR / +EGMR) yang dianggap balasan; baris lain dari modem (mis. +ECELL) diabaikan.
  */
 class ImeiWriter(private val filesDir: File, private val sh: SystemShell) {
 
     companion object {
         private val EGMR = Regex("""\+EGMR:\s*"?(\d{15})"?""")
+        private val RESULT_LINE = Regex("""^(OK|ERROR|AT|\+CM[ES] ERROR|\+EGMR).*""")
+        private val RESULT_CODE = Regex("""(?m)^(OK|ERROR|\+CM[ES] ERROR|\+EGMR)""")
 
         // Potongan skrip shell. Tanda ^ diganti menjadi $ saat skrip dirakit (supaya Kotlin tidak menganggapnya template string).
         private const val SH_PORTS = """
 ERR=/data/local/tmp/senza_at.err
 OUT=/data/local/tmp/senza_at.out
+FZ=/data/local/tmp/senza_at.frozen
 : > "^ERR"
+: > "^FZ"
+trap 'for pid in ^(cat "^FZ" 2>/dev/null); do kill -CONT "^pid" 2>/dev/null; done' EXIT HUP INT TERM
 CANDS=""
-for d in /dev/radio/pttycmd1 /dev/radio/atci1 /dev/radio/pttycmd2 /dev/radio/atci2; do
+for d in /dev/radio/atci1 /dev/radio/atci2 /dev/radio/pttycmd1 /dev/radio/pttycmd2; do
   [ -c "^d" ] && CANDS="^CANDS ^d"
 done
 if [ -z "^CANDS" ]; then
@@ -76,7 +87,6 @@ if [ -z "^CANDS" ]; then
   ls /dev/radio 2>/dev/null | head -30
   exit 0
 fi
-echo "@@CANDS^CANDS"
 """
 
         private const val SH_LOAD1 = """
@@ -91,16 +101,21 @@ if [ ^{#I2} -ne 15 ]; then echo "@@BADFILE"; exit 0; fi
 case "^I2" in *[!0-9]*) echo "@@BADFILE"; exit 0;; esac
 """
 
-        // at PORT TERM PERINTAH [BATAS_DALAM_PERSEPULUH_DETIK]: port dibuka sekali (fd 3, baca+tulis), balasan dikumpulkan
-        // sampai muncul OK/ERROR atau batas waktu habis. TERM: rn = CR+LF, r = CR.
+        // at PORT TERM PERINTAH [BATAS_DALAM_PERSEPULUH_DETIK]: port dibuka sekali (fd 3, baca+tulis). Data lama dibuang dulu,
+        // lalu balasan dikumpulkan sampai muncul OK/ERROR atau batas waktu habis. TERM: rn = CR+LF, r = CR.
         private const val SH_AT = """
 at() {
   : > "^OUT"
   (
     exec 3<>"^1" || exit 9
+    cat <&3 > /dev/null &
+    DP=^!
+    sleep 0.3
+    kill ^DP 2>/dev/null
+    wait ^DP 2>/dev/null
     cat <&3 > "^OUT" &
     CP=^!
-    sleep 0.2
+    sleep 0.1
     if [ "^2" = rn ]; then printf '%s\r\n' "^3" >&3; else printf '%s\r' "^3" >&3; fi
     i=0
     while [ ^i -lt ^{4:-25} ]; do
@@ -114,24 +129,69 @@ at() {
   ) 2>>"^ERR"
   tr -d '\r' < "^OUT"
 }
+diag() {
+  echo "@@DIAG"
+  echo "SELinux: ^(getenforce 2>/dev/null)"
+  dmesg 2>/dev/null | grep -E 'avc:.*(pttycmd|atci|radio_device)' | tail -3
+  cat "^ERR" 2>/dev/null | head -4
+  rm -f "^OUT" "^ERR"
+}
 """
 
+        // Tahap 1: port tanpa pemegang lain dites langsung. Tahap 2: port yang dipegang layanan radio — layanan dijeda dulu.
         private const val SH_PROBE = """
 USE=""
 n=0
+i=0
 for p in ^CANDS; do
-  for t in rn r; do
-    n=^((n+1))
-    R=^(at "^p" "^t" AT 20)
-    echo "@@P^n ^p ^t"
-    echo "^R"
-    case "^R" in *OK*) USE="^p ^t"; break 2;; esac
-  done
+  HL=^(lsof "^p" 2>/dev/null | grep -v '[C]OMMAND')
+  i=^((i+1))
+  echo "@@H^i ^p"
+  if [ -n "^HL" ]; then echo "^HL" | while read c q r; do echo "^c(^q)"; done; else echo "-"; fi
+  if [ -z "^HL" ] && [ -z "^USE" ] && [ ^n -lt 4 ]; then
+    for t in rn r; do
+      n=^((n+1))
+      R=^(at "^p" "^t" AT 20)
+      echo "@@P^n ^p ^t"
+      echo "^R"
+      case "^R" in *OK*) USE="^p ^t"; break;; esac
+    done
+  fi
 done
+m=0
 if [ -z "^USE" ]; then
-  set -- ^CANDS
-  USE="^1 rn"
-  echo "@@BLIND ^USE"
+  for p in /dev/radio/pttycmd1 /dev/radio/atci1 /dev/radio/pttycmd2 /dev/radio/atci2; do
+    [ -c "^p" ] || continue
+    HL=^(lsof "^p" 2>/dev/null | grep -v '[C]OMMAND')
+    [ -n "^HL" ] || continue
+    FR=""
+    FN=""
+    for pid in ^(echo "^HL" | while read c q r; do echo "^q"; done | sort -u); do
+      case "^(cat /proc/^pid/comm 2>/dev/null)" in
+        *ril*|*atci*|*radio*) if kill -STOP "^pid" 2>/dev/null; then FR="^FR ^pid"; FN="^FN ^(cat /proc/^pid/comm)(^pid)"; fi;;
+      esac
+    done
+    echo "^FR" > "^FZ"
+    [ -n "^FR" ] || continue
+    sleep 0.3
+    for t in rn r; do
+      n=^((n+1))
+      R=^(at "^p" "^t" AT 20)
+      echo "@@P^n ^p ^t frozen"
+      echo "^R"
+      case "^R" in *OK*) USE="^p ^t"; break;; esac
+    done
+    if [ -n "^USE" ]; then echo "@@FROZEN^FN"; break; fi
+    for pid in ^FR; do kill -CONT "^pid" 2>/dev/null; done
+    : > "^FZ"
+    m=^((m+1))
+    [ ^m -ge 2 ] && break
+  done
+fi
+if [ -z "^USE" ]; then
+  echo "@@NOPORT"
+  diag
+  exit 0
 fi
 P=^{USE% *}
 T=^{USE#* }
@@ -154,14 +214,16 @@ echo "@@W2"; at "^P" "^T" "AT+EGMR=1,10,\"^I2\"" 40
         private const val SH_AFTER = """
 echo "@@A1"; at "^P" "^T" 'AT+EGMR=0,7'
 echo "@@A2"; at "^P" "^T" 'AT+EGMR=0,10'
-echo "@@DIAG"
-echo "SELinux: ^(getenforce 2>/dev/null)"
-ls -lZ /dev/radio 2>/dev/null | grep -E 'pttycmd|atci' | head -6
-lsof ^P 2>/dev/null | head -4
-dmesg 2>/dev/null | grep -E 'avc:.*(pttycmd|atci|radio_device)' | tail -3
-cat "^ERR" 2>/dev/null | head -4
-rm -f "^OUT" "^ERR"
+for pid in ^(cat "^FZ" 2>/dev/null); do kill -CONT "^pid" 2>/dev/null; done
+: > "^FZ"
+diag
 """
+
+        // Jaring pengaman: dijalankan SETELAH skrip utama (selesai, gagal, atau timeout) supaya layanan radio tidak tertinggal terjeda.
+        private val SH_RESUME = """
+for pid in ^(cat /data/local/tmp/senza_at.frozen 2>/dev/null); do kill -CONT "^pid" 2>/dev/null; done
+rm -f /data/local/tmp/senza_at.frozen
+""".replace('^', '$')
 
         private val ALTERNATIF = listOf(
             "Cara lain: kalau HP punya Engineering Mode MTK (*#*#3646633#*#*), cari menu AT Command (biasanya di Telephony), pilih Phone 1, lalu kirim AT+EGMR=1,7,\"IMEI1\" (dan AT+EGMR=1,10,\"IMEI2\" untuk IMEI 2).",
@@ -185,13 +247,34 @@ rm -f "^OUT" "^ERR"
             return m.mapValues { it.value.toString() }
         }
 
-        /** Ringkas balasan modem untuk laporan: baris tak kosong digabung; kosong menjadi "tidak ada balasan". */
+        /**
+         * Ringkas balasan modem untuk laporan. Hanya baris hasil (OK / ERROR / +CME ERROR / +EGMR) yang ditampilkan;
+         * baris lain (mis. +ECELL milik layanan radio) hanya dihitung. Kosong menjadi "tidak ada balasan".
+         */
         fun brief(section: String?): String {
-            val t = (section ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" | ")
-            return if (t.isEmpty()) "tidak ada balasan" else t.take(90)
+            val all = (section ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val keep = all.filter { RESULT_LINE.matches(it) }
+            val other = all.size - keep.size
+            val body = if (keep.isEmpty()) "tidak ada balasan" else keep.joinToString(" | ").take(90)
+            return if (other > 0) "$body (+$other baris lain, bukan jawaban)" else body
         }
 
-        private fun answered(section: String?): Boolean = !section.isNullOrBlank()
+        /** True hanya kalau ada kode hasil sungguhan (bukan sekadar data lain seperti +ECELL). */
+        private fun answered(section: String?): Boolean = RESULT_CODE.containsMatchIn(section ?: "")
+
+        /** Siapa yang memegang tiap port (bagian H1, H2, …) sebagai baris laporan. */
+        private fun holders(sec: Map<String, String>): List<String> {
+            val out = mutableListOf<String>()
+            for ((k, v) in sec) {
+                if (k.length >= 2 && k[0] == 'H' && k.drop(1).all { it.isDigit() }) {
+                    val rows = v.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                    val port = rows.firstOrNull() ?: ""
+                    val who = rows.drop(1).filter { it != "-" }
+                    out += "Pemegang $port: " + (if (who.isEmpty()) "tidak ada" else who.joinToString(", "))
+                }
+            }
+            return out
+        }
 
         /** Hasil tes "AT" per port (bagian P1, P2, …) sebagai baris laporan. */
         private fun probes(sec: Map<String, String>): List<String> {
@@ -199,11 +282,12 @@ rm -f "^OUT" "^ERR"
             for ((k, v) in sec) {
                 if (k.length >= 2 && k[0] == 'P' && k.drop(1).all { it.isDigit() }) {
                     val rows = v.lines()
-                    val head = (rows.firstOrNull() ?: "").trim()
-                    val port = head.substringBefore(' ')
-                    val term = if (head.endsWith(" rn")) "CR+LF" else "CR"
+                    val tk = (rows.firstOrNull() ?: "").trim().split(" ")
+                    val port = tk.firstOrNull() ?: ""
+                    val term = if (tk.getOrNull(1) == "rn") "CR+LF" else "CR"
+                    val frozen = if (tk.getOrNull(2) == "frozen") ", radio dijeda" else ""
                     val reply = brief(rows.drop(1).joinToString("\n"))
-                    out += "Tes AT $port ($term): $reply"
+                    out += "Tes AT $port ($term$frozen): $reply"
                 }
             }
             return out
@@ -211,20 +295,47 @@ rm -f "^OUT" "^ERR"
 
         private fun diag(sec: Map<String, String>): List<String> {
             val d = (sec["DIAG"] ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.take(10)
+            val h = holders(sec)
             val p = probes(sec)
-            if (d.isEmpty() && p.isEmpty()) return emptyList()
-            return listOf("Info teknis (kirim ke saya kalau masih gagal):") + p + d
+            if (d.isEmpty() && h.isEmpty() && p.isEmpty()) return emptyList()
+            return listOf("Info teknis (kirim ke saya kalau masih gagal):") + h + p + d
         }
 
         private fun noDev(detail: String?): ImeiWriteReport {
             val ls = (detail ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.take(12)
             val lines = mutableListOf(
-                "ROM ini tidak membuka /dev/radio/pttycmd1, atci1, pttycmd2 maupun atci2 untuk root, jadi tidak ada yang ditulis.",
+                "ROM ini tidak membuka /dev/radio/atci1, atci2, pttycmd1 maupun pttycmd2 untuk root, jadi tidak ada yang ditulis.",
                 "Cara ini tidak bisa dipakai di HP ini."
             )
             lines += ALTERNATIF
             if (ls.isNotEmpty()) lines += "Isi /dev/radio: " + ls.joinToString(", ")
             return ImeiWriteReport(false, "Port AT modem tidak ditemukan", lines)
+        }
+
+        private fun noPort(sec: Map<String, String>, title: String): ImeiWriteReport {
+            val lines = mutableListOf(
+                "Tidak ada port AT yang menjawab tes \"AT\", termasuk setelah layanan radio dijeda sebentar. Tidak ada yang ditulis."
+            )
+            lines += ALTERNATIF
+            lines += diag(sec)
+            return ImeiWriteReport(false, title, lines)
+        }
+
+        /** Susun laporan baca dari keluaran skrip baca. Dipisah dari [read] supaya bisa diuji tanpa root. */
+        fun analyzeRead(sec: Map<String, String>): ImeiWriteReport {
+            if ("NODEV" in sec) return noDev(sec["NODEV"])
+            if ("NOPORT" in sec) return noPort(sec, "Port AT tidak menjawab")
+            val a1 = parseEgmr(sec["A1"] ?: "")
+            val a2 = parseEgmr(sec["A2"] ?: "")
+            val lines = mutableListOf<String>()
+            lines += "IMEI 1: ${a1 ?: "tidak terbaca / kosong"}"
+            lines += "IMEI 2: ${a2 ?: "tidak terbaca / kosong"}"
+            if (a1 == null && a2 == null) {
+                lines += "Balasan modem IMEI 1: ${brief(sec["A1"])}"
+                lines += "Balasan modem IMEI 2: ${brief(sec["A2"])}"
+                lines += diag(sec)
+            }
+            return ImeiWriteReport(a1 != null || a2 != null, "IMEI yang dilaporkan modem", lines)
         }
 
         /**
@@ -236,6 +347,7 @@ rm -f "^OUT" "^ERR"
             if ("BADFILE" in sec) {
                 return ImeiWriteReport(false, "IMEI gagal ditulis", listOf("Berkas IMEI sementara tidak terbaca oleh root. Tidak ada yang ditulis."))
             }
+            if ("NOPORT" in sec) return noPort(sec, "IMEI gagal ditulis")
             val two = !imei2.isNullOrEmpty()
             val b1 = parseEgmr(sec["B1"] ?: "")
             val b2 = parseEgmr(sec["B2"] ?: "")
@@ -251,12 +363,12 @@ rm -f "^OUT" "^ERR"
             val useRaw = (sec["USE"] ?: "").trim()
             val usePort = useRaw.substringBefore(' ')
             val useTerm = if (useRaw.endsWith(" rn")) "CR+LF" else "CR"
+            val fz = (sec["FROZEN"] ?: "").trim()
             val lines = mutableListOf<String>()
-            if ("BLIND" in sec) {
-                lines += "Tidak ada port AT yang menjawab tes \"AT\". Perintah tetap dikirim ke $usePort tanpa konfirmasi."
-            } else {
-                lines += "Port AT: $usePort ($useTerm)"
+            if (fz.isNotEmpty()) {
+                lines += "Layanan radio ($fz) dijeda sebentar agar balasan modem bisa dibaca, lalu dilanjutkan."
             }
+            lines += "Port AT: $usePort ($useTerm)"
             lines += "Sebelum: IMEI 1 = ${b1 ?: "kosong/tidak terbaca"}" + if (two || b2 != null) ", IMEI 2 = ${b2 ?: "kosong/tidak terbaca"}" else ""
             lines += "Balasan modem tulis IMEI 1: ${brief(w1)}"
             if (two) lines += "Balasan modem tulis IMEI 2: ${brief(w2)}"
@@ -280,7 +392,7 @@ rm -f "^OUT" "^ERR"
                 return ImeiWriteReport(false, "IMEI dikirim, belum terverifikasi", lines, uncertain = true)
             }
 
-            lines += "Modem menolak perintah tulis, jadi IMEI TIDAK berubah. Jangan percaya angka di layar sebelum restart dan cek *#06#."
+            lines += "Modem menolak perintah tulis (lihat balasan di atas), jadi IMEI TIDAK berubah. Jangan percaya angka di layar sebelum restart dan cek *#06#."
             lines += ALTERNATIF
             lines += diag(sec)
             return ImeiWriteReport(false, "IMEI gagal ditulis", lines)
@@ -306,24 +418,24 @@ rm -f "^OUT" "^ERR"
         return sb.toString().replace('^', '$')
     }
 
+    /** Pastikan layanan radio tidak tertinggal terjeda, apa pun yang terjadi pada skrip utama. */
+    private fun resume() {
+        try {
+            sh.root(SH_RESUME, "Lanjutkan layanan radio", 15_000)
+        } catch (_: Throwable) {
+        }
+    }
+
     /** Baca IMEI yang sekarang dilaporkan modem (tidak menulis apa pun). */
     fun read(): ImeiWriteReport {
         if (!sh.rootVerified) return ImeiWriteReport(false, "Butuh akses root", listOf("Izinkan root dulu di Tools → Akses."))
-        val r = sh.root(script(null, null, write = false), "Baca IMEI (AT)", 90_000)
-        val sec = sections(r.lines)
-        if ("NODEV" in sec) return noDev(sec["NODEV"])
-        val a1 = parseEgmr(sec["A1"] ?: "")
-        val a2 = parseEgmr(sec["A2"] ?: "")
-        val lines = mutableListOf<String>()
-        lines += "IMEI 1: ${a1 ?: "tidak terbaca / kosong"}"
-        lines += "IMEI 2: ${a2 ?: "tidak terbaca / kosong"}"
-        if (a1 == null && a2 == null) {
-            lines += "Balasan modem IMEI 1: ${brief(sec["A1"])}"
-            lines += "Balasan modem IMEI 2: ${brief(sec["A2"])}"
-            lines += diag(sec)
+        try {
+            val r = sh.root(script(null, null, write = false), "Baca IMEI (AT)", 120_000)
+            val rep = analyzeRead(sections(r.lines))
+            return if (r.timedOut) rep.copy(lines = rep.lines + "Perintah root melewati batas waktu; hasil di atas mungkin belum lengkap.") else rep
+        } finally {
+            resume()
         }
-        if (r.timedOut) lines += "Perintah root melewati batas waktu; hasil di atas mungkin belum lengkap."
-        return ImeiWriteReport(a1 != null || a2 != null, "IMEI yang dilaporkan modem", lines)
     }
 
     fun write(imei1: String, imei2: String?): ImeiWriteReport {
@@ -344,6 +456,7 @@ rm -f "^OUT" "^ERR"
             return if (r.timedOut) rep.copy(lines = rep.lines + "Perintah root melewati batas waktu; hasil di atas mungkin belum lengkap.") else rep
         } finally {
             f1.delete(); f2?.delete()
+            resume()
         }
     }
 }

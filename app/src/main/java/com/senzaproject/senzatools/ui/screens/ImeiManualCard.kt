@@ -96,7 +96,7 @@ fun ImeiManualCard(s: ServiceLocator) {
             )
         }
         if (busy) Spinner("Bicara dengan modem… (bisa sampai ± 1 menit, jangan tutup app)")
-        Caption("Setelah menulis: restart HP lalu cek dengan *#06#.")
+        Caption("Menulis/membaca menjeda layanan radio ± 10 detik (sinyal sempat hilang, lalu kembali sendiri). Setelah menulis: restart HP lalu cek dengan *#06#.")
     }
 
     report?.let { r ->
@@ -112,7 +112,8 @@ fun ImeiManualCard(s: ServiceLocator) {
         ConfirmDialog(
             title = "Tulis IMEI ke modem?",
             message = "IMEI 1: $imei1" + (if (imei2.isNotEmpty()) "\nIMEI 2: $imei2" else "") +
-                "\n\nPastikan sama persis dengan yang tertera di box/label HP ini. Nilai lama dibaca dulu dan ditampilkan di laporan.",
+                "\n\nPastikan sama persis dengan yang tertera di box/label HP ini. Nilai lama dibaca dulu dan ditampilkan di laporan." +
+                "\n\nSupaya balasan modem bisa dibaca, layanan radio dijeda ± 10 detik lalu dilanjutkan otomatis. Sinyal bisa hilang sebentar; kalau tidak kembali, restart HP.",
             confirmText = "Ya, Tulis",
             danger = true,
             onConfirm = {
